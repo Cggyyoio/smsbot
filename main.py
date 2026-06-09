@@ -53,6 +53,7 @@ async def message_router(update: Update, context):
     from handlers.admin.panel import (
         adm_file_handler, adm_price_msg_handler,
         adm_sms_file_handler, adm_sms_price_msg_handler,
+        adm_force_channel_msg_handler,
     )
     from handlers.stars_binance_pay import (
         stars_amount_message_handler,
@@ -105,7 +106,11 @@ async def message_router(update: Update, context):
     if await adm_sms_price_msg_handler(update, context):
         return
 
-    # ⑧ إعدادات الأدمن (آخر شيء)
+    # ⑧ قناة اشتراك إجباري
+    if await adm_force_channel_msg_handler(update, context):
+        return
+
+    # ⑨ إعدادات الأدمن (آخر شيء)
     await adm_price_msg_handler(update, context)
 
 
@@ -154,6 +159,7 @@ def register_handlers(app: Application):
         my_orders_callback, deposit_callback,
         charge_usdt_menu_callback,
         sms_countries_callback, sms_buy_callback,
+        check_sub_callback,
     )
 
     # ── Admin ─────────────────────────────────────────────
@@ -177,6 +183,8 @@ def register_handlers(app: Application):
         adm_sms_callback, adm_sms_upload_callback, adm_sms_price_callback,
         adm_sms_list_callback, adm_sms_clear_callback,
         adm_sms_country_price_callback, adm_sms_setcp_callback,
+        adm_cfg_force_sub_callback, adm_force_add_callback,
+        adm_force_del_callback, adm_force_delone_callback, adm_force_clear_callback,
     )
 
     # ── Stars / Binance ───────────────────────────────────
@@ -201,6 +209,7 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(my_orders_callback,        pattern="^my_orders$"))
     app.add_handler(CallbackQueryHandler(deposit_callback,          pattern="^deposit$"))
     app.add_handler(CallbackQueryHandler(charge_usdt_menu_callback, pattern="^charge_usdt_menu$"))
+    app.add_handler(CallbackQueryHandler(check_sub_callback,        pattern="^check_sub$"))
 
     # ━━━━━━━━━━━━━━━━━━━━━━ SMS ━━━━━━━━━━━━━━━━━━━━━━━━━━━
     app.add_handler(CallbackQueryHandler(sms_countries_callback, pattern="^sms_countries$"))
@@ -339,6 +348,13 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_sms_setcp_callback,        pattern=r"^adm_sms_setcp_.+$"))
     app.add_handler(CallbackQueryHandler(adm_sms_list_callback,         pattern="^adm_sms_list$"))
     app.add_handler(CallbackQueryHandler(adm_sms_clear_callback,        pattern="^adm_sms_clear$"))
+
+    # Admin — اشتراك إجباري
+    app.add_handler(CallbackQueryHandler(adm_cfg_force_sub_callback, pattern="^adm_cfg_force_sub$"))
+    app.add_handler(CallbackQueryHandler(adm_force_add_callback,     pattern="^adm_force_add$"))
+    app.add_handler(CallbackQueryHandler(adm_force_del_callback,     pattern="^adm_force_del$"))
+    app.add_handler(CallbackQueryHandler(adm_force_delone_callback,  pattern=r"^adm_force_delone_\d+$"))
+    app.add_handler(CallbackQueryHandler(adm_force_clear_callback,   pattern="^adm_force_clear$"))
 
     # Admin — السعر الافتراضي
     async def _adm_default_price(u, c):

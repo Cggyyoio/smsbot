@@ -2,6 +2,7 @@
 🗄️ database.py
 """
 import sqlite3
+import json
 import logging
 import os
 from typing import Optional
@@ -594,3 +595,15 @@ class Database:
                 "SELECT * FROM sms_orders WHERE user_tg_id=? ORDER BY id DESC LIMIT ?",
                 (user_tg_id, limit)
             ).fetchall()]
+
+    # ══ Forced Subscription Channels ══════════════════════
+    def get_force_channels(self) -> list:
+        """يرجع قائمة القنوات الإجبارية [{"id": -100x, "name": "...", "link": "..."}]"""
+        raw = self.get_setting("force_channels", "[]")
+        try:
+            return json.loads(raw)
+        except Exception:
+            return []
+
+    def set_force_channels(self, channels: list):
+        self.set_setting("force_channels", json.dumps(channels, ensure_ascii=False))
