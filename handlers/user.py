@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 شراء رقم تيليجرام", callback_data="buy_country")],
+        [InlineKeyboardButton("🛒 شراء رقم جاهز تيليجرام", callback_data="buy_country")],
         [InlineKeyboardButton("📱 أرقام SMS",           callback_data="sms_countries")],
         [
             InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit"),
@@ -35,39 +35,93 @@ async def _edit(q, text, kb=None, mode="HTML"):
         if "not modified" not in str(e).lower(): logger.warning(f"edit: {e}")
 
 
+# ══ Forced Subscription ═════════════════════════════════════
+
+async def check_subscription(user_id: int, channels: list, bot) -> list:
+    """يتحقق من اشتراك المستخدم — يرجع قائمة القنوات اللي مش مشترك فيها"""
+    not_joined = []
+    for ch in channels:
+        try:
+            member = await bot.get_chat_member(chat_id=ch["id"], user_id=user_id)
+            if member.status in ("left", "kicked", "banned"):
+                not_joined.append(ch)
+        except Exception:
+            not_joined.append(ch)   # لو فيه خطأ → اعتبره مش مشترك
+    return not_joined
+
+
+def _not_joined_msg(not_joined: list) -> tuple:
+    """يبني رسالة وكيبورد للاشتراك الإجباري"""
+    text = (
+        "╔══════════════════════╗\n"
+        "║  🔐  اشتراك إجباري  ║\n"
+        "╚══════════════════════╝\n\n"
+        "للاستمرار في استخدام البوت\n"
+        "يجب الاشتراك في القنوات التالية أولاً:\n\n"
+    )
+    rows = []
+    for i, ch in enumerate(not_joined, 1):
+        name = ch.get("name") or ch.get("link") or str(ch["id"])
+        link = ch.get("link", "")
+        text += "{}️⃣  <b>{}</b>\n".format(i, name)
+        if link:
+            rows.append([InlineKeyboardButton("📢 {}".format(name), url=link)])
+
+    text += "\nبعد الاشتراك اضغط الزر أدناه ✅"
+    rows.append([InlineKeyboardButton("✅ تحققت من اشتراكي", callback_data="check_sub")])
+    return text, InlineKeyboardMarkup(rows)
+
+
 # ══ /start ══════════════════════════════════════════════════
 
 async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db   = context.bot_data["db"]
     user = update.effective_user
+    bot  = context.bot
     is_new = db.ensure_user(user.id, user.username, user.first_name)
 
     if db.is_banned(user.id):
-        await update.effective_message.reply_text(
-            "🚫 <b>حسابك محظور.</b>\nتواصل مع الدعم للاستفسار.",
-            parse_mode="HTML"
-        )
+        txt = "🚫 <b>حسابك محظور</b>\nتواصل مع الدعم للاستفسار."
+        if update.callback_query:
+            try: await update.callback_query.edit_message_text(txt, parse_mode="HTML")
+            except Exception: await update.effective_message.reply_text(txt, parse_mode="HTML")
+        else:
+            await update.effective_message.reply_text(txt, parse_mode="HTML")
         return
 
+    # ── تحقق من الاشتراك الإجباري ──────────────────────────
+    channels = db.get_force_channels()
+    if channels:
+        not_joined = await check_subscription(user.id, channels, bot)
+        if not_joined:
+            text, kb = _not_joined_msg(not_joined)
+            if update.callback_query:
+                try: await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+                except Exception: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+
+    # ── القائمة الرئيسية ───────────────────────────────────
     bal  = db.get_balance(user.id)
     name = user.first_name or "صديق"
 
     text = (
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📲 <b>بوت أرقام تيليجرام</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👋 أهلاً <b>{}</b>!\n\n"
-        "💳 رصيدك الحالي: <b>${:.3f}</b>\n\n"
-        "⬇️ اختر من القائمة:".format(name, bal)
+        "👋 أهلاً <b>{name}</b>\n\n"
+        "👤 {uname}\n"
+        "🆔 <code>{uid}</code>\n"
+        "💳 <b>${bal:.3f}</b>"
+    ).format(
+        name=name,
+        uname="@" + user.username if user.username else "بدون يوزر",
+        uid=user.id,
+        bal=bal
     )
 
-    # لو callback query → عدّل الرسالة الحالية بدل ما تبعت جديدة
     if update.callback_query:
         try:
             await update.callback_query.edit_message_text(
-                text,
-                reply_markup=main_menu_kb(),
-                parse_mode="HTML"
+                text, reply_markup=main_menu_kb(), parse_mode="HTML"
             )
         except Exception:
             await update.effective_message.reply_text(
@@ -83,7 +137,7 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ch = db.get_setting("newuser_channel", "").strip()
             if ch and ch != "0":
                 uname = "@" + user.username if user.username else "لا يوجد"
-                await context.bot.send_message(
+                await bot.send_message(
                     chat_id=int(ch),
                     text=(
                         "🆕 <b>مستخدم جديد انضم</b>\n\n"
@@ -93,7 +147,15 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                     parse_mode="HTML"
                 )
-        except Exception: pass
+        except Exception:
+            pass
+
+
+# ══ check_sub callback (زر "تحققت من اشتراكي") ══════════════
+
+async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("🔄 جارٍ التحقق...", show_alert=False)
+    await start_callback(update, context)
 
 
 # ══ حسابي ════════════════════════════════════════════════════
