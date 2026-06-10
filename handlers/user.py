@@ -274,14 +274,20 @@ async def my_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _answer(q, t("banned_short", lang), True); return
 
     bal    = db.get_balance(user.id)
-    orders = db.get_orders_by_user(user.id, limit=50)
-    done   = sum(1 for o in orders if o["status"] == "completed")
-    spent  = sum(o["cost"] for o in orders if o["status"] == "completed")
+    orders     = db.get_orders_by_user(user.id, limit=200)
+    sms_orders = db.get_sms_orders_by_user(user.id, limit=200)
+    done       = sum(1 for o in orders     if o["status"] == "completed")
+    sms_done   = sum(1 for o in sms_orders if o["status"] == "completed")
+    spent      = sum(o["cost"] for o in orders     if o["status"] == "completed")
+    sms_spent  = sum(o["cost"] for o in sms_orders if o["status"] == "completed")
+    total_orders = len(orders) + len(sms_orders)
+    total_done   = done + sms_done
+    total_spent  = spent + sms_spent
     uname  = "@" + user.username if user.username else ("لا يوجد" if lang == "ar" else "None")
 
     await _edit(q,
         t("account_title", lang, uid=user.id, uname=uname, bal=bal,
-          orders=len(orders), done=done, spent=spent),
+          orders=total_orders, done=total_done, spent=total_spent),
         InlineKeyboardMarkup([
             [InlineKeyboardButton(t("btn_deposit2", lang), callback_data="deposit")],
             [InlineKeyboardButton(t("btn_orders2",  lang), callback_data="my_orders")],
