@@ -190,16 +190,36 @@ class SmsPoller:
                                 # ✅ وصل الكود
                                 self.db.complete_sms_order(order_id, code)
                                 self.db.delete_sms_number(sms_num_id)
+                                done_text = _build_sms_done_msg(phone, country, code, full_text)
                                 try:
                                     await self.bot.edit_message_text(
                                         chat_id=chat_id,
                                         message_id=msg_id,
-                                        text=_build_sms_done_msg(phone, country, code, full_text),
+                                        text=done_text,
                                         parse_mode="HTML"
                                     )
                                 except BadRequest as e:
                                     if "not modified" not in str(e).lower():
                                         logger.warning("edit sms done: %s", e)
+                                # إشعار قناة التفعيلات
+                                try:
+                                    ch = self.db.get_setting("notify_channel", "").strip()
+                                    if ch and ch not in ("", "0"):
+                                        notif = (
+                                            "✅ <b>كود SMS جديد</b>\n\n"
+                                            "🌍 <b>الدولة:</b> {country}\n"
+                                            "📞 <b>الرقم:</b> <code>{phone}</code>\n"
+                                            "🔑 <b>الكود:</b> <code>{code}</code>\n"
+                                            "👤 <b>المستخدم:</b> <code>{uid}</code>"
+                                        ).format(country=country, phone=phone,
+                                                 code=code, uid=user_tg_id)
+                                        await self.bot.send_message(
+                                            chat_id=int(ch),
+                                            text=notif,
+                                            parse_mode="HTML"
+                                        )
+                                except Exception as e:
+                                    logger.warning("sms notify_channel error: %s", e)
                                 return
                     except asyncio.CancelledError:
                         raise
