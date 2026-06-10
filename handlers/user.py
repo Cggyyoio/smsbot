@@ -79,15 +79,19 @@ async def _send_notify(bot, db, *, app_type: str, flag: str, country: str,
 
 def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(t("btn_buy_tg", lang),      callback_data="buy_country")],
-        [InlineKeyboardButton(t("btn_sms", lang),          callback_data="sms_countries")],
         [
-            InlineKeyboardButton(t("btn_deposit", lang),  callback_data="deposit"),
-            InlineKeyboardButton(t("btn_account", lang),  callback_data="my_account"),
+            InlineKeyboardButton(t("btn_buy_tg",  lang), callback_data="buy_country"),
+            InlineKeyboardButton(t("btn_sms",     lang), callback_data="sms_countries"),
         ],
-        [InlineKeyboardButton(t("btn_orders", lang),       callback_data="my_orders")],
-        [InlineKeyboardButton(t("btn_instructions", lang), callback_data="instructions")],
-        [InlineKeyboardButton(t("btn_language", lang),     callback_data="choose_language")],
+        [
+            InlineKeyboardButton(t("btn_deposit", lang), callback_data="deposit"),
+            InlineKeyboardButton(t("btn_account", lang), callback_data="my_account"),
+        ],
+        [
+            InlineKeyboardButton(t("btn_orders",       lang), callback_data="my_orders"),
+            InlineKeyboardButton(t("btn_instructions", lang), callback_data="instructions"),
+        ],
+        [InlineKeyboardButton(t("btn_language", lang), callback_data="choose_language")],
     ]
     if db:
         act_link  = db.get_setting("activation_channel_link", "").strip()
@@ -95,7 +99,7 @@ def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
         sup_link  = db.get_setting("support_link", "").strip()
         ch_row = []
         if act_link:  ch_row.append(InlineKeyboardButton(t("btn_activation_ch", lang), url=act_link))
-        if main_link: ch_row.append(InlineKeyboardButton(t("btn_main_ch", lang),       url=main_link))
+        if main_link: ch_row.append(InlineKeyboardButton(t("btn_main_ch",       lang), url=main_link))
         if ch_row: rows.append(ch_row)
         if sup_link:  rows.append([InlineKeyboardButton(t("btn_support", lang),        url=sup_link)])
     return InlineKeyboardMarkup(rows)
