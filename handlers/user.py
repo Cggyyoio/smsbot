@@ -30,37 +30,75 @@ def _lang(db, uid: int) -> str:
     return db.get_user_lang(uid)
 
 # ──────────────────────────────────────────────────────────
+#  إشعار قناة التفعيلات (موحّد)
+# ──────────────────────────────────────────────────────────
+
+def _mask_phone(phone: str) -> str:
+    digits = str(phone).lstrip("+")
+    return "+" + digits[:4] + "★★★"
+
+def _mask_code(code: str) -> str:
+    return "".join(ch if i % 2 == 0 else "★" for i, ch in enumerate(str(code)))
+
+def _mask_uid(uid) -> str:
+    return str(uid)[:3] + "★★★"
+
+async def _send_notify(bot, db, *, app_type: str, flag: str, country: str,
+                       phone: str, code=None, uid, price: float,
+                       status: str = "تم التفعيل ⚡"):
+    try:
+        ch = db.get_setting("notify_channel", "").strip()
+        if not ch or ch == "0":
+            return
+        bot_me       = await bot.get_me()
+        bot_username = "@" + bot_me.username
+        code_line    = _mask_code(code) if code else "⏳ في الانتظار"
+        text = (
+            "✅ <b>تم شراء رقم جديد</b>\n\n"
+            "🌐 <b>التطبيق:</b> {app}\n"
+            "🌍 <b>الدولة:</b> {flag} {country}\n"
+            "📞 <b>الرقم:</b> <code>{phone}</code>\n"
+            "🔑 <b>الكود:</b> <code>{code}</code>\n"
+            "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
+            "⚡ <b>الحالة:</b> {status}\n"
+            "💰 <b>السعر:</b> ${price:.3f}\n"
+            "🤖 <b>للشراء:</b> {bot}"
+        ).format(
+            app=app_type, flag=flag, country=country,
+            phone=_mask_phone(phone), code=code_line,
+            uid=_mask_uid(uid), status=status,
+            price=float(price), bot=bot_username
+        )
+        await bot.send_message(chat_id=int(ch), text=text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("notify_channel error: %s", e)
+
+# ──────────────────────────────────────────────────────────
 #  القائمة الرئيسية
 # ──────────────────────────────────────────────────────────
 
-def main_menu_kb(lang="ar", db=None, bot=None) -> InlineKeyboardMarkup:
+def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(t("btn_buy_tg", lang),       callback_data="buy_country")],
-        [InlineKeyboardButton(t("btn_sms", lang),           callback_data="sms_countries")],
+        [InlineKeyboardButton(t("btn_buy_tg", lang),      callback_data="buy_country")],
+        [InlineKeyboardButton(t("btn_sms", lang),          callback_data="sms_countries")],
         [
-            InlineKeyboardButton(t("btn_deposit", lang),   callback_data="deposit"),
-            InlineKeyboardButton(t("btn_account", lang),   callback_data="my_account"),
+            InlineKeyboardButton(t("btn_deposit", lang),  callback_data="deposit"),
+            InlineKeyboardButton(t("btn_account", lang),  callback_data="my_account"),
         ],
-        [InlineKeyboardButton(t("btn_orders", lang),        callback_data="my_orders")],
-        [InlineKeyboardButton(t("btn_instructions", lang),  callback_data="instructions")],
-        [InlineKeyboardButton(t("btn_language", lang),      callback_data="choose_language")],
+        [InlineKeyboardButton(t("btn_orders", lang),       callback_data="my_orders")],
+        [InlineKeyboardButton(t("btn_instructions", lang), callback_data="instructions")],
+        [InlineKeyboardButton(t("btn_language", lang),     callback_data="choose_language")],
     ]
-    # صف القنوات والدعم
-    ch_row = []
     if db:
         act_link  = db.get_setting("activation_channel_link", "").strip()
         main_link = db.get_setting("main_channel_link", "").strip()
         sup_link  = db.get_setting("support_link", "").strip()
-        if act_link:
-            ch_row.append(InlineKeyboardButton(t("btn_activation_ch", lang), url=act_link))
-        if main_link:
-            ch_row.append(InlineKeyboardButton(t("btn_main_ch", lang), url=main_link))
-        if ch_row:
-            rows.append(ch_row)
-        if sup_link:
-            rows.append([InlineKeyboardButton(t("btn_support", lang), url=sup_link)])
+        ch_row = []
+        if act_link:  ch_row.append(InlineKeyboardButton(t("btn_activation_ch", lang), url=act_link))
+        if main_link: ch_row.append(InlineKeyboardButton(t("btn_main_ch", lang),       url=main_link))
+        if ch_row: rows.append(ch_row)
+        if sup_link:  rows.append([InlineKeyboardButton(t("btn_support", lang),        url=sup_link)])
     return InlineKeyboardMarkup(rows)
-
 
 # ──────────────────────────────────────────────────────────
 #  Forced Subscription
@@ -77,7 +115,6 @@ async def check_subscription(user_id: int, channels: list, bot) -> list:
             not_joined.append(ch)
     return not_joined
 
-
 def _not_joined_msg(not_joined: list, lang="ar") -> tuple:
     text = t("force_sub_title", lang)
     rows = []
@@ -91,108 +128,85 @@ def _not_joined_msg(not_joined: list, lang="ar") -> tuple:
     rows.append([InlineKeyboardButton(t("force_sub_btn_check", lang), callback_data="check_sub")])
     return text, InlineKeyboardMarkup(rows)
 
-
 # ──────────────────────────────────────────────────────────
-#  اختيار اللغة (onboarding + تغيير لاحق)
+#  اختيار اللغة
 # ──────────────────────────────────────────────────────────
 
 def _lang_kb(next_step="main_menu") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🇸🇦 العربية",  callback_data="set_lang_ar_{}".format(next_step)),
-            InlineKeyboardButton("🇬🇧 English",  callback_data="set_lang_en_{}".format(next_step)),
-        ]
-    ])
-
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🇸🇦 العربية", callback_data="set_lang_ar_{}".format(next_step)),
+        InlineKeyboardButton("🇬🇧 English", callback_data="set_lang_en_{}".format(next_step)),
+    ]])
 
 async def choose_language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """زر تغيير اللغة من القائمة"""
     q = update.callback_query
     await _answer(q)
     await _edit(q, t("choose_lang", "ar"), _lang_kb("main_menu"))
 
-
 async def set_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعيّن اللغة ثم يكمل"""
-    q  = update.callback_query
-    db = context.bot_data["db"]
-    # data = set_lang_ar_main_menu أو set_lang_en_force_sub
-    parts    = q.data.replace("set_lang_", "").split("_", 1)
-    lang     = parts[0]               # "ar" or "en"
+    q         = update.callback_query
+    db        = context.bot_data["db"]
+    parts     = q.data.replace("set_lang_", "").split("_", 1)
+    lang      = parts[0]
     next_step = parts[1] if len(parts) > 1 else "main_menu"
-
     db.set_user_lang(update.effective_user.id, lang)
     await _answer(q, t("lang_set", lang))
-
     if next_step == "force_sub":
-        # بعد اختيار اللغة → فحص الاشتراك الإجباري
         await _do_force_sub_or_menu(update, context, lang)
     else:
-        # تغيير لغة عادي → ارجع للقائمة
         await start_callback(update, context)
-
 
 # ──────────────────────────────────────────────────────────
 #  /start
 # ──────────────────────────────────────────────────────────
 
 async def _send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str):
-    db   = context.bot_data["db"]
-    user = update.effective_user
-    bal  = db.get_balance(user.id)
-    name = user.first_name or ("صديق" if lang == "ar" else "Friend")
+    db    = context.bot_data["db"]
+    user  = update.effective_user
+    bal   = db.get_balance(user.id)
+    name  = user.first_name or ("صديق" if lang == "ar" else "Friend")
     uname = "@" + user.username if user.username else ("بدون يوزر" if lang == "ar" else "No username")
-
-    text = t("welcome", lang, name=name, uname=uname, uid=user.id, bal=bal)
-    kb   = main_menu_kb(lang=lang, db=db)
-
+    text  = t("welcome", lang, name=name, uname=uname, uid=user.id, bal=bal)
+    kb    = main_menu_kb(lang=lang, db=db)
     if update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+        try:    await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
-
 async def _do_force_sub_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str):
-    db   = context.bot_data["db"]
-    bot  = context.bot
-    user = update.effective_user
-
+    db       = context.bot_data["db"]
+    user     = update.effective_user
     channels = db.get_force_channels()
     if channels:
-        not_joined = await check_subscription(user.id, channels, bot)
+        not_joined = await check_subscription(user.id, channels, context.bot)
         if not_joined:
             text, kb = _not_joined_msg(not_joined, lang)
             if update.callback_query:
-                try: await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
-                except Exception: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+                try:    await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+                except: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
             else:
                 await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
             return
-
-    # مشترك → القائمة الرئيسية
     db.set_onboarded(user.id)
     await _send_main_menu(update, context, lang)
 
-
 async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    db   = context.bot_data["db"]
-    user = update.effective_user
-    bot  = context.bot
+    db     = context.bot_data["db"]
+    user   = update.effective_user
+    bot    = context.bot
     is_new = db.ensure_user(user.id, user.username, user.first_name)
 
     if db.is_banned(user.id):
         txt = t("banned", "ar")
         if update.callback_query:
-            try: await update.callback_query.edit_message_text(txt, parse_mode="HTML")
-            except Exception: await update.effective_message.reply_text(txt, parse_mode="HTML")
+            try:    await update.callback_query.edit_message_text(txt, parse_mode="HTML")
+            except: await update.effective_message.reply_text(txt, parse_mode="HTML")
         else:
             await update.effective_message.reply_text(txt, parse_mode="HTML")
         return
 
-    # ── إشعار المستخدم الجديد ──────────────────────────────
+    # إشعار المستخدم الجديد
     if is_new:
         try:
             ch    = db.get_setting("newuser_channel", "").strip()
@@ -201,12 +215,8 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ch and ch not in ("", "0"):
                 await bot.send_message(
                     chat_id=int(ch),
-                    text=(
-                        "🆕 <b>مستخدم جديد</b>\n\n"
-                        "👤 <b>{name}</b>\n"
-                        "📛 {uname}\n"
-                        "🆔 <code>{uid}</code>"
-                    ).format(name=name, uname=uname, uid=user.id),
+                    text="🆕 <b>مستخدم جديد</b>\n\n👤 <b>{name}</b>\n📛 {uname}\n🆔 <code>{uid}</code>".format(
+                        name=name, uname=uname, uid=user.id),
                     parse_mode="HTML"
                 )
         except Exception:
@@ -214,28 +224,22 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lang = _lang(db, user.id)
 
-    # ── مستخدم جديد لأول مرة → اختيار اللغة أولاً ─────────
     if not db.is_onboarded(user.id):
         msg = t("choose_lang", "ar")
         if update.callback_query:
-            try: await update.callback_query.edit_message_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
-            except Exception: await update.effective_message.reply_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
+            try:    await update.callback_query.edit_message_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
+            except: await update.effective_message.reply_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
         else:
             await update.effective_message.reply_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
         return
 
-    # ── مستخدم قديم أو بعد اختيار اللغة ──────────────────
     await _do_force_sub_or_menu(update, context, lang)
-
-
-# ══ check_sub callback ════════════════════════════════════
 
 async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("🔄", show_alert=False)
     db   = context.bot_data["db"]
     lang = _lang(db, update.effective_user.id)
     await _do_force_sub_or_menu(update, context, lang)
-
 
 # ──────────────────────────────────────────────────────────
 #  التعليمات
@@ -246,18 +250,11 @@ async def instructions_callback(update: Update, context: ContextTypes.DEFAULT_TY
     db   = context.bot_data["db"]
     lang = _lang(db, update.effective_user.id)
     await _answer(q)
-
     if lang == "en":
-        text = db.get_setting("instructions_en", "").strip()
-        if not text:
-            text = t("instructions_default", "en")
+        text = db.get_setting("instructions_en", "").strip() or t("instructions_default", "en")
     else:
-        text = db.get_setting("instructions_ar", "").strip()
-        if not text:
-            text = t("instructions_default", "ar")
-
+        text = db.get_setting("instructions_ar", "").strip() or t("instructions_default", "ar")
     await _edit(q, text, _back_kb("main_menu", lang))
-
 
 # ──────────────────────────────────────────────────────────
 #  حسابي
@@ -273,28 +270,27 @@ async def my_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if db.is_banned(user.id):
         await _answer(q, t("banned_short", lang), True); return
 
-    bal    = db.get_balance(user.id)
-    orders     = db.get_orders_by_user(user.id, limit=200)
-    sms_orders = db.get_sms_orders_by_user(user.id, limit=200)
+    bal        = db.get_balance(user.id)
+    orders     = db.get_orders_by_user(user.id, limit=500)
+    sms_orders = db.get_sms_orders_by_user(user.id, limit=500)
     done       = sum(1 for o in orders     if o["status"] == "completed")
     sms_done   = sum(1 for o in sms_orders if o["status"] == "completed")
     spent      = sum(o["cost"] for o in orders     if o["status"] == "completed")
     sms_spent  = sum(o["cost"] for o in sms_orders if o["status"] == "completed")
-    total_orders = len(orders) + len(sms_orders)
-    total_done   = done + sms_done
-    total_spent  = spent + sms_spent
-    uname  = "@" + user.username if user.username else ("لا يوجد" if lang == "ar" else "None")
+    uname      = "@" + user.username if user.username else ("لا يوجد" if lang == "ar" else "None")
 
     await _edit(q,
-        t("account_title", lang, uid=user.id, uname=uname, bal=bal,
-          orders=total_orders, done=total_done, spent=total_spent),
+        t("account_title", lang,
+          uid=user.id, uname=uname, bal=bal,
+          orders=len(orders) + len(sms_orders),
+          done=done + sms_done,
+          spent=spent + sms_spent),
         InlineKeyboardMarkup([
             [InlineKeyboardButton(t("btn_deposit2", lang), callback_data="deposit")],
             [InlineKeyboardButton(t("btn_orders2",  lang), callback_data="my_orders")],
             [InlineKeyboardButton(t("btn_back",     lang), callback_data="main_menu")],
         ])
     )
-
 
 # ──────────────────────────────────────────────────────────
 #  اختيار الدولة
@@ -323,15 +319,12 @@ async def buy_country_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             price = db.get_price(c["country_code"])
             can   = "✅" if bal >= price else "💳"
             row.append(InlineKeyboardButton(
-                "{} {} {} — ${:.2f} ({})".format(
-                    can, c["country_flag"], c["country_name"], price, c["available"]),
+                "{} {} {} — ${:.2f} ({})".format(can, c["country_flag"], c["country_name"], price, c["available"]),
                 callback_data="buy_num_{}".format(c["country_code"])
             ))
         rows.append(row)
     rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
-
     await _edit(q, t("buy_country_title", lang, bal=bal), InlineKeyboardMarkup(rows))
-
 
 # ──────────────────────────────────────────────────────────
 #  تفاصيل الدولة
@@ -362,8 +355,7 @@ async def buy_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     bar = "🟩" * min(can, 5) + "⬜" * max(0, 5 - min(can, 5))
     await _edit(q,
-        t("country_detail", lang, flag=flag, name=cname,
-          price=price, avail=avail, bal=bal, can=can, bar=bar),
+        t("country_detail", lang, flag=flag, name=cname, price=price, avail=avail, bal=bal, can=can, bar=bar),
         InlineKeyboardMarkup([
             [InlineKeyboardButton(
                 t("btn_buy_now", lang) if can > 0 else t("btn_top_up", lang),
@@ -372,7 +364,6 @@ async def buy_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             [InlineKeyboardButton(t("btn_back", lang), callback_data="buy_country")],
         ])
     )
-
 
 # ──────────────────────────────────────────────────────────
 #  تأكيد الشراء
@@ -434,6 +425,7 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if otp_l:
         await otp_l.attach_order(num["phone"], order_id)
 
+    # إشعار القناة عند الشراء — الكود يتحدث لما يوصل في otp_listener
     await _send_notify(
         context.bot, db,
         app_type="تيليجرام",
@@ -445,67 +437,9 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         status="تم الشراء ⏳"
     )
 
-
 # ──────────────────────────────────────────────────────────
-#  بناء رسالة قناة الإشعارات (موحّدة للنوعين)
+#  طلب الكود يدوياً
 # ──────────────────────────────────────────────────────────
-
-def _mask_phone(phone: str) -> str:
-    """يظهر أول 4 أرقام ثم ★★★"""
-    digits = phone.lstrip("+")
-    return "+" + digits[:4] + "★★★"
-
-def _mask_code(code: str) -> str:
-    """يظهر رقم ويخفي رقم بالتناوب"""
-    result = ""
-    for i, ch in enumerate(code):
-        result += ch if i % 2 == 0 else "★"
-    return result
-
-def _mask_uid(uid: int) -> str:
-    """يظهر أول 3 أرقام ثم ★★★"""
-    s = str(uid)
-    return s[:3] + "★★★"
-
-async def _send_notify(bot, db, *, app_type: str, flag: str, country: str,
-                       phone: str, code: str = None, uid: int,
-                       price: float, status: str = "تم التفعيل ⚡"):
-    """يبعت إشعار موحّد لقناة التفعيلات"""
-    try:
-        ch = db.get_setting("notify_channel", "").strip()
-        if not ch or ch == "0":
-            return
-        bot_me = await bot.get_me()
-        bot_username = "@" + bot_me.username
-
-        code_line = _mask_code(code) if code else "⏳ في الانتظار"
-
-        text = (
-            "✅ <b>تم شراء رقم جديد</b>\n\n"
-            "🌐 <b>التطبيق:</b> {app}\n"
-            "🌍 <b>الدولة:</b> {flag} {country}\n"
-            "📞 <b>الرقم:</b> <code>{phone}</code>\n"
-            "🔑 <b>الكود:</b> <code>{code}</code>\n"
-            "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
-            "⚡ <b>الحالة:</b> {status}\n"
-            "💰 <b>السعر:</b> ${price:.3f}\n"
-            "🤖 <b>للشراء:</b> {bot}"
-        ).format(
-            app=app_type,
-            flag=flag, country=country,
-            phone=_mask_phone(phone),
-            code=code_line,
-            uid=_mask_uid(uid),
-            status=status,
-            price=price,
-            bot=bot_username
-        )
-        await bot.send_message(chat_id=int(ch), text=text, parse_mode="HTML")
-    except Exception as e:
-        logger.warning("notify_channel error: %s", e)
-
-
-
 
 async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q        = update.callback_query
@@ -540,9 +474,7 @@ async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     else:
         lang = _lang(db, update.effective_user.id)
-        msg  = "⏳ لم يصل كود بعد، انتظر قليلاً." if lang == "ar" else "⏳ No code yet, wait a moment."
-        await _answer(q, msg, True)
-
+        await _answer(q, "⏳ لم يصل كود بعد، انتظر قليلاً." if lang == "ar" else "⏳ No code yet, wait a moment.", True)
 
 # ──────────────────────────────────────────────────────────
 #  طلباتي
@@ -575,22 +507,21 @@ async def my_orders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await _edit(q, text.strip(), _back_kb(lang=lang))
 
-
 # ──────────────────────────────────────────────────────────
 #  شحن الرصيد
 # ──────────────────────────────────────────────────────────
 
 async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query
-    db  = context.bot_data["db"]
-    cph = context.bot_data.get("cph")
-    ttp = context.bot_data.get("ttp")
-    vah = context.bot_data.get("vah")
+    q    = update.callback_query
+    db   = context.bot_data["db"]
+    cph  = context.bot_data.get("cph")
+    ttp  = context.bot_data.get("ttp")
+    vah  = context.bot_data.get("vah")
     lang = _lang(db, update.effective_user.id)
     await _answer(q)
 
-    stars_on   = db.get_setting("pay_stars",   "0") == "1"
-    binance_on = db.get_setting("pay_binance",  "0") == "1" and bool(db.get_setting("binance_pay_id","").strip())
+    stars_on   = db.get_setting("pay_stars",  "0") == "1"
+    binance_on = db.get_setting("pay_binance", "0") == "1" and bool(db.get_setting("binance_pay_id", "").strip())
     usdt_on    = (cph.is_bep20_enabled() or cph.is_trc20_enabled()) if cph else False
     trx_on     = ttp.is_trx_enabled() if ttp else False
     ton_on     = ttp.is_ton_enabled()  if ttp else False
@@ -609,7 +540,6 @@ async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await _edit(q, t("deposit_title", lang, bal=bal), InlineKeyboardMarkup(rows))
 
-
 async def charge_usdt_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     db   = context.bot_data["db"]
@@ -621,13 +551,12 @@ async def charge_usdt_menu_callback(update: Update, context: ContextTypes.DEFAUL
     trc20_on = cph.is_trc20_enabled() if cph else False
 
     rows = []
-    if trc20_on: rows.append([InlineKeyboardButton("🌐  TRC20 (TRON)", callback_data="charge_trc20")])
-    if bep20_on: rows.append([InlineKeyboardButton("🌐  BEP20 (BSC)",  callback_data="charge_bep20")])
+    if trc20_on: rows.append([InlineKeyboardButton("🌐 TRC20 (TRON)", callback_data="charge_trc20")])
+    if bep20_on: rows.append([InlineKeyboardButton("🌐 BEP20 (BSC)",  callback_data="charge_bep20")])
     if not rows: rows.append([InlineKeyboardButton(t("usdt_unavailable", lang), callback_data="deposit")])
     rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="deposit")])
 
     await _edit(q, t("usdt_title", lang), InlineKeyboardMarkup(rows))
-
 
 # ──────────────────────────────────────────────────────────
 #  أرقام SMS
@@ -661,9 +590,7 @@ async def sms_countries_callback(update, context):
             ))
         rows.append(row)
     rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
-
     await _edit(q, t("sms_title", lang, bal=bal), InlineKeyboardMarkup(rows))
-
 
 async def sms_buy_callback(update, context):
     q       = update.callback_query
@@ -704,18 +631,18 @@ async def sms_buy_callback(update, context):
         text=_build_sms_waiting_msg(num["phone"], country),
         parse_mode="HTML"
     )
-    msg_id = msg.message_id
-    db.set_sms_order_msg_id(order_id, msg_id)
+    db.set_sms_order_msg_id(order_id, msg.message_id)
 
     if poller:
         poller.start_polling(
             order_id=order_id,
             user_tg_id=user.id,
             chat_id=user.id,
-            msg_id=msg_id,
+            msg_id=msg.message_id,
             phone=num["phone"],
             country=country,
             api_url=num["api_url"],
             cost=price,
             sms_num_id=num["id"]
         )
+    # الإشعار يتبعت في sms_handler.py لما يوصل الكود فعلاً
