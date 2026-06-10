@@ -463,11 +463,10 @@ async def _verify_binance_order(api_key: str, api_secret: str, order_id: str):
             logger.error("[BINANCE] API فشل: {}".format(data))
             return None
 
-        clean = "".join(filter(str.isdigit, order_id))
+        clean = order_id.strip()
         for tx in data.get("data", []):
             api_id = str(tx.get("orderId", "")).strip()
-            digits = "".join(filter(str.isdigit, api_id))
-            if api_id == order_id or digits == clean or clean in digits:
+            if api_id == clean:                      # مطابقة تامة فقط
                 amount = float(tx.get("amount", 0))
                 if amount > 0:
                     return amount

@@ -428,31 +428,78 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if otp_l:
         await otp_l.attach_order(num["phone"], order_id)
 
+    await _send_notify(
+        context.bot, db,
+        app_type="تيليجرام",
+        flag=flag, country=cname,
+        phone=num["phone"],
+        code=None,
+        uid=user.id,
+        price=price,
+        status="تم الشراء ⏳"
+    )
+
+
+# ──────────────────────────────────────────────────────────
+#  بناء رسالة قناة الإشعارات (موحّدة للنوعين)
+# ──────────────────────────────────────────────────────────
+
+def _mask_phone(phone: str) -> str:
+    """يظهر أول 4 أرقام ثم ★★★"""
+    digits = phone.lstrip("+")
+    return "+" + digits[:4] + "★★★"
+
+def _mask_code(code: str) -> str:
+    """يظهر رقم ويخفي رقم بالتناوب"""
+    result = ""
+    for i, ch in enumerate(code):
+        result += ch if i % 2 == 0 else "★"
+    return result
+
+def _mask_uid(uid: int) -> str:
+    """يظهر أول 3 أرقام ثم ★★★"""
+    s = str(uid)
+    return s[:3] + "★★★"
+
+async def _send_notify(bot, db, *, app_type: str, flag: str, country: str,
+                       phone: str, code: str = None, uid: int,
+                       price: float, status: str = "تم التفعيل ⚡"):
+    """يبعت إشعار موحّد لقناة التفعيلات"""
     try:
         ch = db.get_setting("notify_channel", "").strip()
-        if ch and ch != "0":
-            p = num["phone"]
-            v = max(1, len(p) // 3)
-            masked = p[:v] + "★" * (len(p) - v * 2) + p[-v:]
-            await context.bot.send_message(
-                chat_id=int(ch),
-                text=(
-                    "🛒 <b>طلب شراء جديد</b>\n\n"
-                    "🌍 الدولة: {} {}\n"
-                    "📞 الرقم: <code>+{}</code>\n"
-                    "👤 المستخدم: <code>{}</code>\n"
-                    "💰 السعر: <b>${:.3f}</b>\n"
-                    "🆔 الطلب: <b>#{}</b>"
-                ).format(flag, cname, masked, user.id, price, order_id),
-                parse_mode="HTML"
-            )
-    except Exception:
-        pass
+        if not ch or ch == "0":
+            return
+        bot_me = await bot.get_me()
+        bot_username = "@" + bot_me.username
+
+        code_line = _mask_code(code) if code else "⏳ في الانتظار"
+
+        text = (
+            "✅ <b>تم شراء رقم جديد</b>\n\n"
+            "🌐 <b>التطبيق:</b> {app}\n"
+            "🌍 <b>الدولة:</b> {flag} {country}\n"
+            "📞 <b>الرقم:</b> <code>{phone}</code>\n"
+            "🔑 <b>الكود:</b> <code>{code}</code>\n"
+            "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
+            "⚡ <b>الحالة:</b> {status}\n"
+            "💰 <b>السعر:</b> ${price:.3f}\n"
+            "🤖 <b>للشراء:</b> {bot}"
+        ).format(
+            app=app_type,
+            flag=flag, country=country,
+            phone=_mask_phone(phone),
+            code=code_line,
+            uid=_mask_uid(uid),
+            status=status,
+            price=price,
+            bot=bot_username
+        )
+        await bot.send_message(chat_id=int(ch), text=text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("notify_channel error: %s", e)
 
 
-# ──────────────────────────────────────────────────────────
-#  طلب الكود يدوياً
-# ──────────────────────────────────────────────────────────
+
 
 async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q        = update.callback_query
