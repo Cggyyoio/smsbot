@@ -28,25 +28,23 @@ def _short(v, n=18):
 def admin_main_kb():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📱 الأرقام",       callback_data="adm_numbers"),
-            InlineKeyboardButton("💰 الأسعار",        callback_data="adm_prices"),
+            InlineKeyboardButton("📱 أرقام TG",      callback_data="adm_numbers"),
+            InlineKeyboardButton("💬 أرقام SMS",     callback_data="adm_sms"),
         ],
         [
-            InlineKeyboardButton("📋 الطلبات",        callback_data="adm_orders"),
-            InlineKeyboardButton("💳 الشحن",           callback_data="adm_deposits"),
+            InlineKeyboardButton("💰 الأسعار",       callback_data="adm_prices"),
+            InlineKeyboardButton("📊 الإحصائيات",    callback_data="adm_stats"),
         ],
         [
-            InlineKeyboardButton("👥 المستخدمين",     callback_data="adm_users"),
-            InlineKeyboardButton("📊 الإحصائيات",     callback_data="adm_stats"),
+            InlineKeyboardButton("📋 الطلبات",       callback_data="adm_orders"),
+            InlineKeyboardButton("💳 الشحن",         callback_data="adm_deposits"),
         ],
         [
-            InlineKeyboardButton("📢 إشعار جماعي",    callback_data="adm_broadcast"),
-            InlineKeyboardButton("⚙️ الإعدادات",      callback_data="adm_settings"),
+            InlineKeyboardButton("👥 المستخدمين",    callback_data="adm_users"),
+            InlineKeyboardButton("📢 إشعار جماعي",  callback_data="adm_broadcast"),
         ],
-        [
-            InlineKeyboardButton("📱 أرقام SMS",      callback_data="adm_sms"),
-        ],
-        [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")],
+        [InlineKeyboardButton("⚙️ الإعدادات",        callback_data="adm_settings")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة",     callback_data="main_menu")],
     ])
 
 
@@ -97,9 +95,16 @@ async def adm_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         revenue_today = conn.execute(
             "SELECT COALESCE(SUM(cost),0) FROM orders WHERE status='completed' AND date(created_at)=date('now')"
         ).fetchone()[0]
-        top_countries = conn.execute(
-            "SELECT country_flag, country_name, COUNT(*) as c FROM orders GROUP BY country_code ORDER BY c DESC LIMIT 5"
-        ).fetchall()
+        top_countries = conn.execute("""
+            SELECT
+                COALESCE(n.country_flag, '🌍') as flag,
+                COALESCE(n.country_name, o.country_code) as name,
+                COUNT(*) as c
+            FROM orders o
+            LEFT JOIN numbers n ON n.country_code = o.country_code
+            GROUP BY o.country_code
+            ORDER BY c DESC LIMIT 5
+        """).fetchall()
         # SMS orders
         sms_total = conn.execute(
             "SELECT COUNT(*) FROM sms_orders"
