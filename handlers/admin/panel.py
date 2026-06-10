@@ -651,6 +651,8 @@ ADMIN_STATES = (
     "waiting_addbal", "waiting_subbal", "waiting_setbal",
     "waiting_sms_txt", "waiting_sms_price", "waiting_sms_country_price",
     "waiting_force_channel",
+    "waiting_instructions_ar", "waiting_instructions_en",
+    "waiting_link_activation", "waiting_link_main", "waiting_link_support",
 )
 
 
@@ -776,16 +778,18 @@ async def adm_settings_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await update.callback_query.edit_message_text(
         "⚙️ <b>الإعدادات</b>\n\nاختر القسم:",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ نجوم تيليجرام",   callback_data="adm_cfg_stars")],
-            [InlineKeyboardButton("🟡 Binance Pay",      callback_data="adm_cfg_binance")],
-            [InlineKeyboardButton("💎 BEP20 (USDT)",    callback_data="adm_cfg_bep20")],
-            [InlineKeyboardButton("💎 TRC20 (USDT)",    callback_data="adm_cfg_trc20")],
-            [InlineKeyboardButton("💎 TON",              callback_data="adm_cfg_ton")],
-            [InlineKeyboardButton("💎 TRX",              callback_data="adm_cfg_trx")],
-            [InlineKeyboardButton("📱 فودافون كاش",     callback_data="adm_cfg_vod")],
-            [InlineKeyboardButton("📢 قنوات الإشعارات", callback_data="adm_cfg_channels")],
-            [InlineKeyboardButton("📌 اشتراك إجباري",   callback_data="adm_cfg_force_sub")],
-            [InlineKeyboardButton("🔙 رجوع",             callback_data="adm_main")],
+            [InlineKeyboardButton("⭐ نجوم تيليجرام",    callback_data="adm_cfg_stars")],
+            [InlineKeyboardButton("🟡 Binance Pay",       callback_data="adm_cfg_binance")],
+            [InlineKeyboardButton("💎 BEP20 (USDT)",     callback_data="adm_cfg_bep20")],
+            [InlineKeyboardButton("💎 TRC20 (USDT)",     callback_data="adm_cfg_trc20")],
+            [InlineKeyboardButton("💎 TON",               callback_data="adm_cfg_ton")],
+            [InlineKeyboardButton("💎 TRX",               callback_data="adm_cfg_trx")],
+            [InlineKeyboardButton("📱 فودافون كاش",      callback_data="adm_cfg_vod")],
+            [InlineKeyboardButton("📢 قنوات الإشعارات",  callback_data="adm_cfg_channels")],
+            [InlineKeyboardButton("📌 اشتراك إجباري",    callback_data="adm_cfg_force_sub")],
+            [InlineKeyboardButton("📖 التعليمات",         callback_data="adm_cfg_instructions")],
+            [InlineKeyboardButton("🔗 روابط وقنوات",     callback_data="adm_cfg_links")],
+            [InlineKeyboardButton("🔙 رجوع",              callback_data="adm_main")],
         ]),
         parse_mode="HTML"
     )
@@ -1454,4 +1458,144 @@ async def adm_force_channel_msg_handler(update: Update, context: ContextTypes.DE
         "🔗 <b>الرابط:</b> {}".format(name, ch_id, link or "—"),
         parse_mode="HTML"
     )
+    return True
+
+
+# ══════════════════════════════════════════════════════════
+#  التعليمات
+# ══════════════════════════════════════════════════════════
+
+async def adm_cfg_instructions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db   = context.bot_data["db"]
+    ar   = db.get_setting("instructions_ar", "").strip() or "لم يتم التعيين"
+    en   = db.get_setting("instructions_en", "").strip() or "Not set"
+    await update.callback_query.edit_message_text(
+        "📖 <b>التعليمات</b>\n\n"
+        "🇸🇦 <b>العربية (الحالية):</b>\n{ar}\n\n"
+        "🇬🇧 <b>English (current):</b>\n{en}".format(
+            ar=ar[:300] + ("..." if len(ar) > 300 else ""),
+            en=en[:300] + ("..." if len(en) > 300 else ""),
+        ),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ تعديل العربية",  callback_data="adm_set_instructions_ar")],
+            [InlineKeyboardButton("✏️ Edit English",   callback_data="adm_set_instructions_en")],
+            [InlineKeyboardButton("🔙 رجوع",            callback_data="adm_settings")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_set_instructions_ar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_instructions_ar"
+    await update.callback_query.edit_message_text(
+        "✏️ أرسل نص التعليمات <b>بالعربية</b>:\n\n"
+        "<i>يدعم تنسيق HTML: &lt;b&gt;, &lt;i&gt;, &lt;code&gt;</i>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_instructions")
+        ]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_set_instructions_en_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_instructions_en"
+    await update.callback_query.edit_message_text(
+        "✏️ Send the <b>English</b> instructions text:\n\n"
+        "<i>HTML formatting supported: &lt;b&gt;, &lt;i&gt;, &lt;code&gt;</i>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_instructions")
+        ]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_instructions_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    state = context.user_data.get("adm_state")
+    if state not in ("waiting_instructions_ar", "waiting_instructions_en"):
+        return False
+    text = update.message.text or ""
+    lang_key = "instructions_ar" if state == "waiting_instructions_ar" else "instructions_en"
+    context.bot_data["db"].set_setting(lang_key, text)
+    context.user_data.pop("adm_state", None)
+    lang_name = "العربية" if "ar" in lang_key else "English"
+    await update.message.reply_text(
+        "✅ تم حفظ التعليمات ({}).".format(lang_name),
+        parse_mode="HTML"
+    )
+    return True
+
+
+# ══════════════════════════════════════════════════════════
+#  روابط القنوات والدعم
+# ══════════════════════════════════════════════════════════
+
+async def adm_cfg_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    act     = db.get_setting("activation_channel_link", "").strip() or "—"
+    main_ch = db.get_setting("main_channel_link",       "").strip() or "—"
+    sup     = db.get_setting("support_link",             "").strip() or "—"
+    await update.callback_query.edit_message_text(
+        "🔗 <b>روابط القنوات والدعم</b>\n\n"
+        "📢 قناة التفعيلات: <code>{act}</code>\n"
+        "📣 القناة الرئيسية: <code>{main}</code>\n"
+        "🆘 الدعم الفني: <code>{sup}</code>".format(act=act, main=main_ch, sup=sup),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 رابط قناة التفعيلات",  callback_data="adm_set_link_activation")],
+            [InlineKeyboardButton("📣 رابط القناة الرئيسية", callback_data="adm_set_link_main")],
+            [InlineKeyboardButton("🆘 رابط الدعم الفني",    callback_data="adm_set_link_support")],
+            [InlineKeyboardButton("🔙 رجوع",                 callback_data="adm_settings")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_set_link_activation_callback(update, context):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_link_activation"
+    await update.callback_query.edit_message_text(
+        "📢 أرسل رابط <b>قناة التفعيلات</b>:\nمثال: <code>https://t.me/mychannel</code>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_links")]]),
+        parse_mode="HTML"
+    )
+
+async def adm_set_link_main_callback(update, context):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_link_main"
+    await update.callback_query.edit_message_text(
+        "📣 أرسل رابط <b>القناة الرئيسية</b>:\nمثال: <code>https://t.me/mychannel</code>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_links")]]),
+        parse_mode="HTML"
+    )
+
+async def adm_set_link_support_callback(update, context):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_link_support"
+    await update.callback_query.edit_message_text(
+        "🆘 أرسل <b>رابط أو يوزر الدعم الفني</b>:\nمثال: <code>https://t.me/support</code>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_links")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_links_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    state = context.user_data.get("adm_state")
+    mapping = {
+        "waiting_link_activation": ("activation_channel_link", "قناة التفعيلات"),
+        "waiting_link_main":       ("main_channel_link",       "القناة الرئيسية"),
+        "waiting_link_support":    ("support_link",            "الدعم الفني"),
+    }
+    if state not in mapping:
+        return False
+    key, label = mapping[state]
+    text = (update.message.text or "").strip()
+    if not text.startswith("http") and not text.startswith("@"):
+        await update.message.reply_text("❌ الرابط غير صحيح. يجب أن يبدأ بـ https:// أو @")
+        return True
+    context.bot_data["db"].set_setting(key, text)
+    context.user_data.pop("adm_state", None)
+    await update.message.reply_text("✅ تم حفظ رابط <b>{}</b>.".format(label), parse_mode="HTML")
     return True
