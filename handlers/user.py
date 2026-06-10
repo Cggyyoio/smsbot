@@ -122,7 +122,7 @@ async def set_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_step = parts[1] if len(parts) > 1 else "main_menu"
 
     db.set_user_lang(update.effective_user.id, lang)
-    await _answer(q, t("lang_set", lang), show_alert=False)
+    await _answer(q, t("lang_set", lang))
 
     if next_step == "force_sub":
         # بعد اختيار اللغة → فحص الاشتراك الإجباري
