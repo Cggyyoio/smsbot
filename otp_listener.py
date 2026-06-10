@@ -324,23 +324,52 @@ class OtpListener:
         try:
             channel = self.db.get_setting("notify_channel")
             if channel and channel.strip() not in ("", "0"):
+                # نجيب بيانات الدولة
+                order_data = self.db.get_order(order_id)
+                cc = order_data.get("country_code", "") if order_data else ""
+                countries = self.db.get_available_countries()
+                c_map  = {c["country_code"]: c for c in countries}
+                c_info = c_map.get(cc, {})
+                flag   = c_info.get("country_flag", "🌍")
+                cname  = c_info.get("country_name",  cc or "غير معروف")
+                price  = order_data.get("cost", 0) if order_data else 0
+                uid    = order_data.get("user_tg_id", 0) if order_data else 0
+
+                # mask
+                p_str = str(phone).lstrip("+")
+                masked_phone = "+" + p_str[:4] + "★★★"
+                masked_uid   = str(uid)[:3] + "★★★"
+                masked_code  = "".join(ch if i % 2 == 0 else "★"
+                                       for i, ch in enumerate(str(code)))
+
+                bot_me = await self.bot.get_me()
+                bot_username = "@" + bot_me.username
+
                 notif = (
-                    "✅ <b>كود جديد</b>\n\n"
-                    "📞 الرقم: <code>+{}</code>\n"
-                    "🔑 الكود: <code>{}</code>\n"
-                    "👤 المستخدم: <code>{}</code>".format(
-                        phone, code, order["user_tg_id"]
-                    )
+                    "✅ <b>تم شراء رقم جديد</b>\n\n"
+                    "🌐 <b>التطبيق:</b> تيليجرام\n"
+                    "🌍 <b>الدولة:</b> {flag} {country}\n"
+                    "📞 <b>الرقم:</b> <code>{phone}</code>\n"
+                    "🔑 <b>الكود:</b> <code>{code}</code>\n"
+                    "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
+                    "⚡ <b>الحالة:</b> تم التفعيل ⚡\n"
+                    "💰 <b>السعر:</b> ${price:.3f}\n"
+                    "🤖 <b>للشراء:</b> {bot}"
+                ).format(
+                    flag=flag, country=cname,
+                    phone=masked_phone, code=masked_code,
+                    uid=masked_uid, price=float(price),
+                    bot=bot_username
                 )
                 if twofa:
-                    notif += "\n🔐 2FA: <code>{}</code>".format(twofa)
+                    notif += "\n🔐 <b>2FA:</b> <code>{}</code>".format(twofa)
                 await self.bot.send_message(
                     chat_id=int(channel),
                     text=notif,
                     parse_mode="HTML"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[OTP] notify_channel error: {e}")
 
         await self._detach(phone)
 

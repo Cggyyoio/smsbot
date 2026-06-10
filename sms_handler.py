@@ -205,18 +205,30 @@ class SmsPoller:
                                 try:
                                     ch = self.db.get_setting("notify_channel", "").strip()
                                     if ch and ch not in ("", "0"):
+                                        p_str      = str(phone).lstrip("+")
+                                        m_phone    = "+" + p_str[:4] + "★★★"
+                                        m_code     = "".join(c if i % 2 == 0 else "★"
+                                                             for i, c in enumerate(str(code)))
+                                        m_uid      = str(user_tg_id)[:3] + "★★★"
+                                        bot_me     = await self.bot.get_me()
+                                        bot_uname  = "@" + bot_me.username
                                         notif = (
-                                            "✅ <b>كود SMS جديد</b>\n\n"
+                                            "✅ <b>تم شراء رقم جديد</b>\n\n"
+                                            "🌐 <b>التطبيق:</b> SMS\n"
                                             "🌍 <b>الدولة:</b> {country}\n"
                                             "📞 <b>الرقم:</b> <code>{phone}</code>\n"
                                             "🔑 <b>الكود:</b> <code>{code}</code>\n"
-                                            "👤 <b>المستخدم:</b> <code>{uid}</code>"
-                                        ).format(country=country, phone=phone,
-                                                 code=code, uid=user_tg_id)
+                                            "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
+                                            "⚡ <b>الحالة:</b> تم التفعيل ⚡\n"
+                                            "💰 <b>السعر:</b> ${price:.3f}\n"
+                                            "🤖 <b>للشراء:</b> {bot}"
+                                        ).format(
+                                            country=country, phone=m_phone,
+                                            code=m_code, uid=m_uid,
+                                            price=float(cost), bot=bot_uname
+                                        )
                                         await self.bot.send_message(
-                                            chat_id=int(ch),
-                                            text=notif,
-                                            parse_mode="HTML"
+                                            chat_id=int(ch), text=notif, parse_mode="HTML"
                                         )
                                 except Exception as e:
                                     logger.warning("sms notify_channel error: %s", e)
