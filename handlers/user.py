@@ -1,29 +1,21 @@
 """
-👤 handlers/user.py
+👤 handlers/user.py — with i18n (AR / EN)
 """
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 from otp_listener import _build_waiting_msg, build_order_msg
+from i18n import t
 
 logger = logging.getLogger(__name__)
 
-# ══ لوحة القائمة الرئيسية ══════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  helpers
+# ──────────────────────────────────────────────────────────
 
-def main_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 شراء رقم جاهز تيليجرام", callback_data="buy_country")],
-        [InlineKeyboardButton("📱 أرقام SMS",           callback_data="sms_countries")],
-        [
-            InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit"),
-            InlineKeyboardButton("👤 حسابي",     callback_data="my_account"),
-        ],
-        [InlineKeyboardButton("📋 طلباتي",       callback_data="my_orders")],
-    ])
-
-def _back_kb(cb="main_menu"):
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data=cb)]])
+def _back_kb(cb="main_menu", lang="ar"):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_back", lang), callback_data=cb)]])
 
 async def _answer(q, text="", alert=False):
     try: await q.answer(text, show_alert=alert)
@@ -32,13 +24,49 @@ async def _answer(q, text="", alert=False):
 async def _edit(q, text, kb=None, mode="HTML"):
     try: await q.edit_message_text(text, reply_markup=kb, parse_mode=mode)
     except BadRequest as e:
-        if "not modified" not in str(e).lower(): logger.warning(f"edit: {e}")
+        if "not modified" not in str(e).lower(): logger.warning("edit: %s", e)
+
+def _lang(db, uid: int) -> str:
+    return db.get_user_lang(uid)
+
+# ──────────────────────────────────────────────────────────
+#  القائمة الرئيسية
+# ──────────────────────────────────────────────────────────
+
+def main_menu_kb(lang="ar", db=None, bot=None) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(t("btn_buy_tg", lang),       callback_data="buy_country")],
+        [InlineKeyboardButton(t("btn_sms", lang),           callback_data="sms_countries")],
+        [
+            InlineKeyboardButton(t("btn_deposit", lang),   callback_data="deposit"),
+            InlineKeyboardButton(t("btn_account", lang),   callback_data="my_account"),
+        ],
+        [InlineKeyboardButton(t("btn_orders", lang),        callback_data="my_orders")],
+        [InlineKeyboardButton(t("btn_instructions", lang),  callback_data="instructions")],
+        [InlineKeyboardButton(t("btn_language", lang),      callback_data="choose_language")],
+    ]
+    # صف القنوات والدعم
+    ch_row = []
+    if db:
+        act_link  = db.get_setting("activation_channel_link", "").strip()
+        main_link = db.get_setting("main_channel_link", "").strip()
+        sup_link  = db.get_setting("support_link", "").strip()
+        if act_link:
+            ch_row.append(InlineKeyboardButton(t("btn_activation_ch", lang), url=act_link))
+        if main_link:
+            ch_row.append(InlineKeyboardButton(t("btn_main_ch", lang), url=main_link))
+        if ch_row:
+            rows.append(ch_row)
+        if sup_link:
+            rows.append([InlineKeyboardButton(t("btn_support", lang), url=sup_link)])
+    return InlineKeyboardMarkup(rows)
 
 
-# ══ Forced Subscription ═════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  Forced Subscription
+# ──────────────────────────────────────────────────────────
 
 async def check_subscription(user_id: int, channels: list, bot) -> list:
-    """يتحقق من اشتراك المستخدم — يرجع قائمة القنوات اللي مش مشترك فيها"""
     not_joined = []
     for ch in channels:
         try:
@@ -46,19 +74,12 @@ async def check_subscription(user_id: int, channels: list, bot) -> list:
             if member.status in ("left", "kicked", "banned"):
                 not_joined.append(ch)
         except Exception:
-            not_joined.append(ch)   # لو فيه خطأ → اعتبره مش مشترك
+            not_joined.append(ch)
     return not_joined
 
 
-def _not_joined_msg(not_joined: list) -> tuple:
-    """يبني رسالة وكيبورد للاشتراك الإجباري"""
-    text = (
-        "╔══════════════════════╗\n"
-        "║  🔐  اشتراك إجباري  ║\n"
-        "╚══════════════════════╝\n\n"
-        "للاستمرار في استخدام البوت\n"
-        "يجب الاشتراك في القنوات التالية أولاً:\n\n"
-    )
+def _not_joined_msg(not_joined: list, lang="ar") -> tuple:
+    text = t("force_sub_title", lang)
     rows = []
     for i, ch in enumerate(not_joined, 1):
         name = ch.get("name") or ch.get("link") or str(ch["id"])
@@ -66,13 +87,95 @@ def _not_joined_msg(not_joined: list) -> tuple:
         text += "{}️⃣  <b>{}</b>\n".format(i, name)
         if link:
             rows.append([InlineKeyboardButton("📢 {}".format(name), url=link)])
-
-    text += "\nبعد الاشتراك اضغط الزر أدناه ✅"
-    rows.append([InlineKeyboardButton("✅ تحققت من اشتراكي", callback_data="check_sub")])
+    text += t("force_sub_after", lang)
+    rows.append([InlineKeyboardButton(t("force_sub_btn_check", lang), callback_data="check_sub")])
     return text, InlineKeyboardMarkup(rows)
 
 
-# ══ /start ══════════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  اختيار اللغة (onboarding + تغيير لاحق)
+# ──────────────────────────────────────────────────────────
+
+def _lang_kb(next_step="main_menu") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇸🇦 العربية",  callback_data="set_lang_ar_{}".format(next_step)),
+            InlineKeyboardButton("🇬🇧 English",  callback_data="set_lang_en_{}".format(next_step)),
+        ]
+    ])
+
+
+async def choose_language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """زر تغيير اللغة من القائمة"""
+    q = update.callback_query
+    await _answer(q)
+    await _edit(q, t("choose_lang", "ar"), _lang_kb("main_menu"))
+
+
+async def set_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يعيّن اللغة ثم يكمل"""
+    q  = update.callback_query
+    db = context.bot_data["db"]
+    # data = set_lang_ar_main_menu أو set_lang_en_force_sub
+    parts    = q.data.replace("set_lang_", "").split("_", 1)
+    lang     = parts[0]               # "ar" or "en"
+    next_step = parts[1] if len(parts) > 1 else "main_menu"
+
+    db.set_user_lang(update.effective_user.id, lang)
+    await _answer(q, t("lang_set", lang), show_alert=False)
+
+    if next_step == "force_sub":
+        # بعد اختيار اللغة → فحص الاشتراك الإجباري
+        await _do_force_sub_or_menu(update, context, lang)
+    else:
+        # تغيير لغة عادي → ارجع للقائمة
+        await start_callback(update, context)
+
+
+# ──────────────────────────────────────────────────────────
+#  /start
+# ──────────────────────────────────────────────────────────
+
+async def _send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str):
+    db   = context.bot_data["db"]
+    user = update.effective_user
+    bal  = db.get_balance(user.id)
+    name = user.first_name or ("صديق" if lang == "ar" else "Friend")
+    uname = "@" + user.username if user.username else ("بدون يوزر" if lang == "ar" else "No username")
+
+    text = t("welcome", lang, name=name, uname=uname, uid=user.id, bal=bal)
+    kb   = main_menu_kb(lang=lang, db=db)
+
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _do_force_sub_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str):
+    db   = context.bot_data["db"]
+    bot  = context.bot
+    user = update.effective_user
+
+    channels = db.get_force_channels()
+    if channels:
+        not_joined = await check_subscription(user.id, channels, bot)
+        if not_joined:
+            text, kb = _not_joined_msg(not_joined, lang)
+            if update.callback_query:
+                try: await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+                except Exception: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+
+    # مشترك → القائمة الرئيسية
+    db.set_onboarded(user.id)
+    await _send_main_menu(update, context, lang)
+
 
 async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db   = context.bot_data["db"]
@@ -81,7 +184,7 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_new = db.ensure_user(user.id, user.username, user.first_name)
 
     if db.is_banned(user.id):
-        txt = "🚫 <b>حسابك محظور</b>\nتواصل مع الدعم للاستفسار."
+        txt = t("banned", "ar")
         if update.callback_query:
             try: await update.callback_query.edit_message_text(txt, parse_mode="HTML")
             except Exception: await update.effective_message.reply_text(txt, parse_mode="HTML")
@@ -89,7 +192,7 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(txt, parse_mode="HTML")
         return
 
-    # ── إشعار المستخدم الجديد (بمجرد الدخول) ──────────────
+    # ── إشعار المستخدم الجديد ──────────────────────────────
     if is_new:
         try:
             ch    = db.get_setting("newuser_channel", "").strip()
@@ -109,116 +212,104 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # ── تحقق من الاشتراك الإجباري ──────────────────────────
-    channels = db.get_force_channels()
-    if channels:
-        not_joined = await check_subscription(user.id, channels, bot)
-        if not_joined:
-            text, kb = _not_joined_msg(not_joined)
-            if update.callback_query:
-                try: await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
-                except Exception: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
-            else:
-                await update.effective_message.reply_text(text, reply_markup=kb, parse_mode="HTML")
-            return
+    lang = _lang(db, user.id)
 
-    # ── القائمة الرئيسية ───────────────────────────────────
-    bal  = db.get_balance(user.id)
-    name = user.first_name or "صديق"
+    # ── مستخدم جديد لأول مرة → اختيار اللغة أولاً ─────────
+    if not db.is_onboarded(user.id):
+        msg = t("choose_lang", "ar")
+        if update.callback_query:
+            try: await update.callback_query.edit_message_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
+            except Exception: await update.effective_message.reply_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
+        else:
+            await update.effective_message.reply_text(msg, reply_markup=_lang_kb("force_sub"), parse_mode="HTML")
+        return
 
-    text = (
-        "👋 أهلاً <b>{name}</b>\n\n"
-        "👤 {uname}\n"
-        "🆔 <code>{uid}</code>\n"
-        "💳 <b>${bal:.3f}</b>"
-    ).format(
-        name=name,
-        uname="@" + user.username if user.username else "بدون يوزر",
-        uid=user.id,
-        bal=bal
-    )
-
-    if update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(
-                text, reply_markup=main_menu_kb(), parse_mode="HTML"
-            )
-        except Exception:
-            await update.effective_message.reply_text(
-                text, reply_markup=main_menu_kb(), parse_mode="HTML"
-            )
-    else:
-        await update.effective_message.reply_text(
-            text, reply_markup=main_menu_kb(), parse_mode="HTML"
-        )
-
-    if is_new:
-        pass  # الإشعار اتبعت في الأعلى
+    # ── مستخدم قديم أو بعد اختيار اللغة ──────────────────
+    await _do_force_sub_or_menu(update, context, lang)
 
 
-# ══ check_sub callback (زر "تحققت من اشتراكي") ══════════════
+# ══ check_sub callback ════════════════════════════════════
 
 async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("🔄 جارٍ التحقق...", show_alert=False)
-    await start_callback(update, context)
+    await update.callback_query.answer("🔄", show_alert=False)
+    db   = context.bot_data["db"]
+    lang = _lang(db, update.effective_user.id)
+    await _do_force_sub_or_menu(update, context, lang)
 
 
-# ══ حسابي ════════════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  التعليمات
+# ──────────────────────────────────────────────────────────
+
+async def instructions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    db   = context.bot_data["db"]
+    lang = _lang(db, update.effective_user.id)
+    await _answer(q)
+
+    if lang == "en":
+        text = db.get_setting("instructions_en", "").strip()
+        if not text:
+            text = t("instructions_default", "en")
+    else:
+        text = db.get_setting("instructions_ar", "").strip()
+        if not text:
+            text = t("instructions_default", "ar")
+
+    await _edit(q, text, _back_kb("main_menu", lang))
+
+
+# ──────────────────────────────────────────────────────────
+#  حسابي
+# ──────────────────────────────────────────────────────────
 
 async def my_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     db   = context.bot_data["db"]
     user = update.effective_user
+    lang = _lang(db, user.id)
     await _answer(q)
 
     if db.is_banned(user.id):
-        await _answer(q, "🚫 حسابك محظور", True); return
+        await _answer(q, t("banned_short", lang), True); return
 
     bal    = db.get_balance(user.id)
     orders = db.get_orders_by_user(user.id, limit=50)
     done   = sum(1 for o in orders if o["status"] == "completed")
     spent  = sum(o["cost"] for o in orders if o["status"] == "completed")
-    uname  = "@" + user.username if user.username else "لا يوجد"
+    uname  = "@" + user.username if user.username else ("لا يوجد" if lang == "ar" else "None")
 
     await _edit(q,
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "👤 <b>حسابي</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🆔 المعرف: <code>{}</code>\n"
-        "📛 يوزر: {}\n\n"
-        "💳 الرصيد: <b>${:.3f}</b>\n"
-        "📦 الطلبات: <b>{}</b> طلب\n"
-        "✅ مكتملة: <b>{}</b>\n"
-        "💸 إجمالي الإنفاق: <b>${:.3f}</b>".format(
-            user.id, uname, bal, len(orders), done, spent),
+        t("account_title", lang, uid=user.id, uname=uname, bal=bal,
+          orders=len(orders), done=done, spent=spent),
         InlineKeyboardMarkup([
-            [InlineKeyboardButton("💰 شحن رصيد", callback_data="deposit")],
-            [InlineKeyboardButton("📋 طلباتي",   callback_data="my_orders")],
-            [InlineKeyboardButton("🔙 رجوع",      callback_data="main_menu")],
+            [InlineKeyboardButton(t("btn_deposit2", lang), callback_data="deposit")],
+            [InlineKeyboardButton(t("btn_orders2",  lang), callback_data="my_orders")],
+            [InlineKeyboardButton(t("btn_back",     lang), callback_data="main_menu")],
         ])
     )
 
 
-# ══ اختيار الدولة ════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  اختيار الدولة
+# ──────────────────────────────────────────────────────────
 
 async def buy_country_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     db   = context.bot_data["db"]
     user = update.effective_user
+    lang = _lang(db, user.id)
     await _answer(q)
     db.ensure_user(user.id, user.username, user.first_name)
 
     if db.is_banned(user.id):
-        await _answer(q, "🚫 حسابك محظور", True); return
+        await _answer(q, t("banned_short", lang), True); return
 
     countries = db.get_available_countries()
     if not countries:
-        await _edit(q,
-            "😔 <b>لا توجد أرقام متاحة حالياً</b>\n\nحاول لاحقاً.",
-            _back_kb()
-        ); return
+        await _edit(q, t("no_numbers", lang), _back_kb(lang=lang)); return
 
-    bal = db.get_balance(user.id)
+    bal  = db.get_balance(user.id)
     rows = []
     for i in range(0, len(countries), 2):
         row = []
@@ -231,22 +322,20 @@ async def buy_country_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 callback_data="buy_num_{}".format(c["country_code"])
             ))
         rows.append(row)
-    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
 
-    await _edit(q,
-        "🛒 <b>اختر الدولة</b>\n\n"
-        "💳 رصيدك: <b>${:.3f}</b>\n"
-        "✅ = يمكنك الشراء  |  💳 = رصيد غير كافٍ".format(bal),
-        InlineKeyboardMarkup(rows)
-    )
+    await _edit(q, t("buy_country_title", lang, bal=bal), InlineKeyboardMarkup(rows))
 
 
-# ══ تفاصيل الدولة ════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  تفاصيل الدولة
+# ──────────────────────────────────────────────────────────
 
 async def buy_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     db   = context.bot_data["db"]
     user = update.effective_user
+    lang = _lang(db, user.id)
     cc   = q.data.replace("buy_num_", "")
     await _answer(q)
 
@@ -262,53 +351,47 @@ async def buy_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     cname  = c.get("country_name", cc)
 
     if avail == 0:
-        await _edit(q,
-            "😔 <b>نفدت أرقام {} {}</b>\n\nحاول دولة أخرى.".format(flag, cname),
-            _back_kb("buy_country")
-        ); return
+        await _edit(q, t("sold_out", lang, flag=flag, name=cname), _back_kb("buy_country", lang))
+        return
 
-    bal_bar = "🟩" * min(can, 5) + "⬜" * max(0, 5 - min(can, 5))
-
+    bar = "🟩" * min(can, 5) + "⬜" * max(0, 5 - min(can, 5))
     await _edit(q,
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "{} <b>{}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💰 سعر الرقم: <b>${:.3f}</b>\n"
-        "📦 المتاح الآن: <b>{}</b> رقم\n\n"
-        "💳 رصيدك: <b>${:.3f}</b>\n"
-        "🛒 يمكنك شراء: <b>{}</b> رقم\n"
-        "{}".format(flag, cname, price, avail, bal, can, bal_bar),
+        t("country_detail", lang, flag=flag, name=cname,
+          price=price, avail=avail, bal=bal, can=can, bar=bar),
         InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "✅ شراء رقم الآن" if can > 0 else "💰 شحن رصيد أولاً",
+                t("btn_buy_now", lang) if can > 0 else t("btn_top_up", lang),
                 callback_data="confirm_buy_{}".format(cc) if can > 0 else "deposit"
             )],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="buy_country")],
+            [InlineKeyboardButton(t("btn_back", lang), callback_data="buy_country")],
         ])
     )
 
 
-# ══ تأكيد الشراء ══════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  تأكيد الشراء
+# ──────────────────────────────────────────────────────────
 
 async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q     = update.callback_query
     db    = context.bot_data["db"]
     otp_l = context.bot_data.get("otp_listener")
     user  = update.effective_user
+    lang  = _lang(db, user.id)
     cc    = q.data.replace("confirm_buy_", "")
     await _answer(q)
 
     if db.is_banned(user.id):
-        await _answer(q, "🚫 حسابك محظور", True); return
+        await _answer(q, t("banned_short", lang), True); return
 
     price = db.get_price(cc)
     num   = db.get_available_number(cc)
 
     if not num:
-        await _answer(q, "😔 نفدت الأرقام! جرب دولة أخرى.", True); return
+        await _answer(q, t("sold_out", lang, flag="", name="").strip(), True); return
 
     if not db.deduct_balance(user.id, price):
-        await _answer(q, "💳 رصيدك غير كافٍ للشراء.", True); return
+        await _answer(q, t("sms_insufficient", lang), True); return
 
     db.mark_number_sold(num["id"], user.id)
     order_id = db.create_order(
@@ -320,7 +403,6 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         twofa=num.get("twofa")
     )
 
-    # جيب بيانات الدولة من الـ DB
     c_list  = db.get_available_countries()
     c_map   = {c["country_code"]: c for c in c_list}
     cc_data = c_map.get(cc, {})
@@ -331,26 +413,27 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         msg = await q.edit_message_text(
             _build_waiting_msg(num["phone"]),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 طلب الكود يدوياً", callback_data="get_otp_{}".format(order_id))]
-            ])
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🔄 طلب الكود يدوياً" if lang == "ar" else "🔄 Request Code Manually",
+                    callback_data="get_otp_{}".format(order_id)
+                )
+            ]])
         )
         msg_id = msg.message_id
     except Exception:
         msg_id = q.message.message_id
 
     db.set_order_msg_id(order_id, msg_id)
-
     if otp_l:
         await otp_l.attach_order(num["phone"], order_id)
 
-    # إشعار قناة التفعيلات
     try:
         ch = db.get_setting("notify_channel", "").strip()
         if ch and ch != "0":
-            phone_str = num["phone"]
-            v = max(1, len(phone_str) // 3)
-            masked = phone_str[:v] + "★" * (len(phone_str) - v * 2) + phone_str[-v:]
+            p = num["phone"]
+            v = max(1, len(p) // 3)
+            masked = p[:v] + "★" * (len(p) - v * 2) + p[-v:]
             await context.bot.send_message(
                 chat_id=int(ch),
                 text=(
@@ -359,15 +442,17 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                     "📞 الرقم: <code>+{}</code>\n"
                     "👤 المستخدم: <code>{}</code>\n"
                     "💰 السعر: <b>${:.3f}</b>\n"
-                    "🆔 الطلب: <b>#{}</b>".format(
-                        flag, cname, masked, user.id, price, order_id)
-                ),
+                    "🆔 الطلب: <b>#{}</b>"
+                ).format(flag, cname, masked, user.id, price, order_id),
                 parse_mode="HTML"
             )
-    except Exception: pass
+    except Exception:
+        pass
 
 
-# ══ طلب الكود يدوياً ══════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  طلب الكود يدوياً
+# ──────────────────────────────────────────────────────────
 
 async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q        = update.callback_query
@@ -389,7 +474,6 @@ async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if code:
         db.set_order_otp(order_id, code)
-        # نجيب twofa من order أولاً، وإلا من numbers كـ fallback
         twofa = order.get("twofa")
         if not twofa and order.get("number_id"):
             num   = db.get_number(order["number_id"])
@@ -397,49 +481,51 @@ async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await q.edit_message_text(
                 build_order_msg(order["phone"], code, twofa=twofa),
-                parse_mode="HTML",
-                reply_markup=None
+                parse_mode="HTML", reply_markup=None
             )
-        except Exception: pass
+        except Exception:
+            pass
     else:
-        await _answer(q, "⏳ لم يصل كود بعد، انتظر قليلاً وحاول مجدداً.", True)
+        lang = _lang(db, update.effective_user.id)
+        msg  = "⏳ لم يصل كود بعد، انتظر قليلاً." if lang == "ar" else "⏳ No code yet, wait a moment."
+        await _answer(q, msg, True)
 
 
-# ══ طلباتي ════════════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  طلباتي
+# ──────────────────────────────────────────────────────────
 
 async def my_orders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q      = update.callback_query
     db     = context.bot_data["db"]
     user   = update.effective_user
+    lang   = _lang(db, user.id)
     orders = db.get_orders_by_user(user.id, limit=10)
     await _answer(q)
 
     if not orders:
-        await _edit(q,
-            "📋 <b>طلباتي</b>\n\n"
-            "لم تقم بأي طلبات بعد.\n"
-            "اضغط «شراء رقم» للبدء! 🛒",
-            _back_kb()
-        ); return
+        await _edit(q, t("no_orders", lang), _back_kb(lang=lang)); return
 
-    text = "📋 <b>آخر {} طلبات</b>\n\n".format(len(orders))
+    text = t("orders_title", lang).format(len(orders))
     for o in orders:
         raw = o.get("otp_code") or ""
         if raw.startswith("cancelled"):
-            code   = "❌ ملغي"
-            status = "❌"
+            code   = t("code_cancelled", lang)
+            status = t("status_cancel",  lang)
         elif raw:
             code   = "<code>{}</code>".format(raw)
-            status = "✅"
+            status = t("status_done",    lang)
         else:
-            code   = "⏳ في الانتظار"
-            status = "⏳"
+            code   = t("code_waiting",   lang)
+            status = t("status_pending", lang)
         text += "{} <code>+{}</code>\n    🔑 {}\n\n".format(status, o["phone"], code)
 
-    await _edit(q, text.strip(), _back_kb())
+    await _edit(q, text.strip(), _back_kb(lang=lang))
 
 
-# ══ شحن الرصيد ════════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  شحن الرصيد
+# ──────────────────────────────────────────────────────────
 
 async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query
@@ -447,10 +533,11 @@ async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cph = context.bot_data.get("cph")
     ttp = context.bot_data.get("ttp")
     vah = context.bot_data.get("vah")
+    lang = _lang(db, update.effective_user.id)
     await _answer(q)
 
-    stars_on   = db.get_setting("pay_stars",  "0") == "1"
-    binance_on = db.get_setting("pay_binance", "0") == "1" and bool(db.get_setting("binance_pay_id","").strip())
+    stars_on   = db.get_setting("pay_stars",   "0") == "1"
+    binance_on = db.get_setting("pay_binance",  "0") == "1" and bool(db.get_setting("binance_pay_id","").strip())
     usdt_on    = (cph.is_bep20_enabled() or cph.is_trc20_enabled()) if cph else False
     trx_on     = ttp.is_trx_enabled() if ttp else False
     ton_on     = ttp.is_ton_enabled()  if ttp else False
@@ -458,34 +545,23 @@ async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal        = db.get_balance(update.effective_user.id)
 
     rows = []
-    if stars_on:   rows.append([InlineKeyboardButton("⭐  نجوم تيليجرام",     callback_data="charge_stars")])
-    if binance_on: rows.append([InlineKeyboardButton("🟡  باينانس ( تلقائي )", callback_data="charge_binance")])
-    if usdt_on:    rows.append([InlineKeyboardButton("💎  USDT عملات رقمية",   callback_data="charge_usdt_menu")])
-    if trx_on:     rows.append([InlineKeyboardButton("🔴  TRX — ترون",          callback_data="charge_trx")])
-    if ton_on:     rows.append([InlineKeyboardButton("💎  TON — تون كوين",      callback_data="charge_ton")])
-    if vod_on:     rows.append([InlineKeyboardButton("📱  فودافون كاش",         callback_data="charge_vodafone")])
+    if stars_on:   rows.append([InlineKeyboardButton(t("btn_stars",   lang), callback_data="charge_stars")])
+    if binance_on: rows.append([InlineKeyboardButton(t("btn_binance", lang), callback_data="charge_binance")])
+    if usdt_on:    rows.append([InlineKeyboardButton(t("btn_usdt",    lang), callback_data="charge_usdt_menu")])
+    if trx_on:     rows.append([InlineKeyboardButton(t("btn_trx",     lang), callback_data="charge_trx")])
+    if ton_on:     rows.append([InlineKeyboardButton(t("btn_ton",     lang), callback_data="charge_ton")])
+    if vod_on:     rows.append([InlineKeyboardButton(t("btn_vod",     lang), callback_data="charge_vodafone")])
+    if not rows:   rows.append([InlineKeyboardButton(t("no_payment",  lang), callback_data="main_menu")])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
 
-    if not rows:
-        rows.append([InlineKeyboardButton("⚠️ لا توجد طرق دفع متاحة حالياً", callback_data="main_menu")])
+    await _edit(q, t("deposit_title", lang, bal=bal), InlineKeyboardMarkup(rows))
 
-    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
-
-    await _edit(q,
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "💳 <b>شحن الرصيد</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💰 رصيدك الحالي: <b>${:.4f}</b>\n\n"
-        "🔽 اختر طريقة الدفع:".format(bal),
-        InlineKeyboardMarkup(rows)
-    )
-
-
-# ══ قائمة شبكات USDT ══════════════════════════════════════════
 
 async def charge_usdt_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query
-    db  = context.bot_data["db"]
-    cph = context.bot_data.get("cph")
+    q    = update.callback_query
+    db   = context.bot_data["db"]
+    cph  = context.bot_data.get("cph")
+    lang = _lang(db, update.effective_user.id)
     await _answer(q)
 
     bep20_on = cph.is_bep20_enabled() if cph else False
@@ -494,36 +570,30 @@ async def charge_usdt_menu_callback(update: Update, context: ContextTypes.DEFAUL
     rows = []
     if trc20_on: rows.append([InlineKeyboardButton("🌐  TRC20 (TRON)", callback_data="charge_trc20")])
     if bep20_on: rows.append([InlineKeyboardButton("🌐  BEP20 (BSC)",  callback_data="charge_bep20")])
-    if not rows: rows.append([InlineKeyboardButton("⚠️ غير متاح", callback_data="deposit")])
-    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="deposit")])
+    if not rows: rows.append([InlineKeyboardButton(t("usdt_unavailable", lang), callback_data="deposit")])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="deposit")])
 
-    await _edit(q,
-        "💎 <b>العملة: USDT — دولار</b>\n\n"
-        "📡 اختر الشبكة المناسبة:\n\n"
-        "⚠️ <b>تنبيه:</b> تأكد من الشبكة الصحيحة\n"
-        "لتجنب فقدان الأموال",
-        InlineKeyboardMarkup(rows)
-    )
+    await _edit(q, t("usdt_title", lang), InlineKeyboardMarkup(rows))
 
 
-# ══ أرقام SMS — اختيار الدولة ════════════════════════════
+# ──────────────────────────────────────────────────────────
+#  أرقام SMS
+# ──────────────────────────────────────────────────────────
 
 async def sms_countries_callback(update, context):
     q    = update.callback_query
     db   = context.bot_data["db"]
     user = update.effective_user
+    lang = _lang(db, user.id)
     await _answer(q)
     db.ensure_user(user.id, user.username, user.first_name)
 
     if db.is_banned(user.id):
-        await _answer(q, "🚫 حسابك محظور", True); return
+        await _answer(q, t("banned_short", lang), True); return
 
     countries = db.get_sms_countries()
     if not countries:
-        await _edit(q,
-            "😔 <b>لا توجد أرقام SMS متاحة حالياً</b>\n\nحاول لاحقاً.",
-            _back_kb()
-        ); return
+        await _edit(q, t("sms_no_numbers", lang), _back_kb(lang=lang)); return
 
     bal  = db.get_balance(user.id)
     rows = []
@@ -537,17 +607,9 @@ async def sms_countries_callback(update, context):
                 callback_data="sms_buy_{}".format(c["country"])
             ))
         rows.append(row)
-    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
 
-    await _edit(q,
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📱 <b>أرقام SMS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💳 رصيدك: <b>${:.3f}</b>\n\n"
-        "✅ = يمكنك الشراء  |  💳 = رصيد غير كافٍ\n\n"
-        "🌍 اختر الدولة:".format(bal),
-        InlineKeyboardMarkup(rows)
-    )
+    await _edit(q, t("sms_title", lang, bal=bal), InlineKeyboardMarkup(rows))
 
 
 async def sms_buy_callback(update, context):
@@ -555,31 +617,25 @@ async def sms_buy_callback(update, context):
     db      = context.bot_data["db"]
     poller  = context.bot_data.get("sms_poller")
     user    = update.effective_user
+    lang    = _lang(db, user.id)
     country = q.data.replace("sms_buy_", "", 1)
     await _answer(q)
 
     if db.is_banned(user.id):
-        await _answer(q, "🚫 حسابك محظور", True); return
+        await _answer(q, t("banned_short", lang), True); return
 
-    price_str = db.get_setting("sms_price", "0.5")
     try:
         price = db.get_sms_price(country)
     except Exception:
-        try:
-            price = float(price_str)
-        except ValueError:
-            price = 0.5
+        price = 0.5
 
-    # تحقق من الرصيد
     if not db.deduct_balance(user.id, price):
-        await _answer(q, "💳 رصيدك غير كافٍ للشراء.", True); return
+        await _answer(q, t("sms_insufficient", lang), True); return
 
-    # احجز رقم
     num = db.lock_sms_number(country, user.id)
     if not num:
-        # ما لقاش رقم — ارجع الرصيد
         db.add_balance(user.id, price)
-        await _answer(q, "😔 نفدت الأرقام! جرب دولة أخرى.", True); return
+        await _answer(q, t("sms_sold_out", lang), True); return
 
     order_id = db.create_sms_order(
         user_tg_id=user.id,
@@ -590,14 +646,12 @@ async def sms_buy_callback(update, context):
     )
 
     from sms_handler import _build_sms_waiting_msg
-    await _answer(q)
     msg = await context.bot.send_message(
         chat_id=user.id,
         text=_build_sms_waiting_msg(num["phone"], country),
         parse_mode="HTML"
     )
     msg_id = msg.message_id
-
     db.set_sms_order_msg_id(order_id, msg_id)
 
     if poller:
