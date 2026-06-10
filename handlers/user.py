@@ -89,6 +89,26 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(txt, parse_mode="HTML")
         return
 
+    # ── إشعار المستخدم الجديد (بمجرد الدخول) ──────────────
+    if is_new:
+        try:
+            ch    = db.get_setting("newuser_channel", "").strip()
+            uname = "@" + user.username if user.username else "بدون يوزر"
+            name  = user.first_name or "صديق"
+            if ch and ch not in ("", "0"):
+                await bot.send_message(
+                    chat_id=int(ch),
+                    text=(
+                        "🆕 <b>مستخدم جديد</b>\n\n"
+                        "👤 <b>{name}</b>\n"
+                        "📛 {uname}\n"
+                        "🆔 <code>{uid}</code>"
+                    ).format(name=name, uname=uname, uid=user.id),
+                    parse_mode="HTML"
+                )
+        except Exception:
+            pass
+
     # ── تحقق من الاشتراك الإجباري ──────────────────────────
     channels = db.get_force_channels()
     if channels:
@@ -133,22 +153,7 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     if is_new:
-        try:
-            ch = db.get_setting("newuser_channel", "").strip()
-            if ch and ch != "0":
-                uname = "@" + user.username if user.username else "لا يوجد"
-                await bot.send_message(
-                    chat_id=int(ch),
-                    text=(
-                        "🆕 <b>مستخدم جديد انضم</b>\n\n"
-                        "🆔 ID: <code>{}</code>\n"
-                        "👤 الاسم: {}\n"
-                        "📛 يوزر: {}".format(user.id, name, uname)
-                    ),
-                    parse_mode="HTML"
-                )
-        except Exception:
-            pass
+        pass  # الإشعار اتبعت في الأعلى
 
 
 # ══ check_sub callback (زر "تحققت من اشتراكي") ══════════════

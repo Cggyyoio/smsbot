@@ -147,7 +147,7 @@ async def stars_amount_message_handler(update: Update, context: ContextTypes.DEF
     min_usd = _stars_min_usd(db)
     if usd < min_usd:
         await update.message.reply_text(
-            "❌ الحد الأدنى هو <b>${:.0f}</b>".format(min_usd),
+            "❌ الحد الأدنى هو <b>${:.2f}</b>".format(min_usd),
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 رجوع", callback_data="charge_stars")
             ]]),
@@ -155,8 +155,14 @@ async def stars_amount_message_handler(update: Update, context: ContextTypes.DEF
         )
         return True
 
-    if usd > 10000:
-        await update.message.reply_text("❌ الحد الأقصى $10,000")
+    if usd > 2500:
+        await update.message.reply_text(
+            "❌ الحد الأقصى <b>$2,500</b>",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 رجوع", callback_data="charge_stars")
+            ]]),
+            parse_mode="HTML"
+        )
         return True
 
     context.user_data.pop("stars_state", None)
@@ -174,6 +180,7 @@ async def _send_stars_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE
             title="شحن ${:.0f} رصيد".format(usd),
             description="دفع {:,} نجمة مقابل إضافة ${:.2f} لرصيدك.".format(stars_need, usd),
             payload="stars_{}_{}".format(update.effective_user.id, usd),
+            provider_token="",          # فارغ للنجوم (XTR)
             currency="XTR",
             prices=[LabeledPrice(
                 label="⭐ {:,} نجمة  ←  ${:.2f}".format(stars_need, usd),
