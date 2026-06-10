@@ -57,13 +57,23 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db    = context.bot_data["db"]
     stats = db.get_stats()
     pend  = len(db.get_pending_deposits())
+    total_revenue = stats["revenue"] + stats.get("sms_revenue", 0)
+    total_orders  = stats["orders"]  + stats.get("sms_orders",  0)
+    total_today   = stats["today"]   + stats.get("sms_today",   0)
     await update.callback_query.edit_message_text(
         "👑 <b>لوحة التحكم</b>\n\n"
         "👥 المستخدمين: <b>{users}</b>  🚫 محظور: <b>{banned}</b>\n"
-        "📱 الأرقام: ✅<b>{available}</b> متاح | 🛒<b>{sold}</b> مباع\n"
+        "📱 أرقام TG: ✅<b>{available}</b> متاح | 🛒<b>{sold}</b> مباع\n"
+        "💬 أرقام SMS: ✅<b>{sms_avail}</b> متاح\n"
         "📦 الطلبات: <b>{orders}</b>  🌟 اليوم: <b>{today}</b>\n"
         "💰 الإيرادات: <b>${revenue:.2f}</b>\n"
-        "⏳ شحن معلق: <b>{pend}</b>".format(pend=pend, **stats),
+        "⏳ شحن معلق: <b>{pend}</b>".format(
+            pend=pend,
+            sms_avail=stats.get("sms_avail", 0),
+            orders=total_orders, today=total_today,
+            revenue=total_revenue,
+            **{k: stats[k] for k in ("users","banned","available","sold")}
+        ),
         reply_markup=admin_main_kb(),
         parse_mode="HTML"
     )
