@@ -118,6 +118,10 @@ class Database:
             cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
             if "is_banned" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
+            if "lang" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'ar'")
+            if "onboarded" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0")
             # migrate: add twofa to orders if not exist
             ocols = [r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()]
             if "twofa" not in ocols:
@@ -607,3 +611,22 @@ class Database:
 
     def set_force_channels(self, channels: list):
         self.set_setting("force_channels", json.dumps(channels, ensure_ascii=False))
+
+    # ══ User Language & Onboarding ════════════════════════
+    def get_user_lang(self, tg_id: int) -> str:
+        with self._conn() as conn:
+            r = conn.execute("SELECT lang FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+            return (r[0] or "ar") if r else "ar"
+
+    def set_user_lang(self, tg_id: int, lang: str):
+        with self._conn() as conn:
+            conn.execute("UPDATE users SET lang=? WHERE tg_id=?", (lang, tg_id))
+
+    def is_onboarded(self, tg_id: int) -> bool:
+        with self._conn() as conn:
+            r = conn.execute("SELECT onboarded FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+            return bool(r and r[0])
+
+    def set_onboarded(self, tg_id: int):
+        with self._conn() as conn:
+            conn.execute("UPDATE users SET onboarded=1 WHERE tg_id=?", (tg_id,))

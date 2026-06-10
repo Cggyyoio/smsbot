@@ -54,6 +54,8 @@ async def message_router(update: Update, context):
         adm_file_handler, adm_price_msg_handler,
         adm_sms_file_handler, adm_sms_price_msg_handler,
         adm_force_channel_msg_handler,
+        adm_instructions_msg_handler,
+        adm_links_msg_handler,
     )
     from handlers.stars_binance_pay import (
         stars_amount_message_handler,
@@ -110,7 +112,15 @@ async def message_router(update: Update, context):
     if await adm_force_channel_msg_handler(update, context):
         return
 
-    # ⑨ إعدادات الأدمن (آخر شيء)
+    # ⑨ التعليمات
+    if await adm_instructions_msg_handler(update, context):
+        return
+
+    # ⑩ روابط القنوات والدعم
+    if await adm_links_msg_handler(update, context):
+        return
+
+    # ⑪ إعدادات الأدمن (آخر شيء)
     await adm_price_msg_handler(update, context)
 
 
@@ -160,6 +170,8 @@ def register_handlers(app: Application):
         charge_usdt_menu_callback,
         sms_countries_callback, sms_buy_callback,
         check_sub_callback,
+        choose_language_callback, set_lang_callback,
+        instructions_callback,
     )
 
     # ── Admin ─────────────────────────────────────────────
@@ -185,6 +197,10 @@ def register_handlers(app: Application):
         adm_sms_country_price_callback, adm_sms_setcp_callback,
         adm_cfg_force_sub_callback, adm_force_add_callback,
         adm_force_del_callback, adm_force_delone_callback, adm_force_clear_callback,
+        adm_cfg_instructions_callback,
+        adm_set_instructions_ar_callback, adm_set_instructions_en_callback,
+        adm_cfg_links_callback,
+        adm_set_link_activation_callback, adm_set_link_main_callback, adm_set_link_support_callback,
     )
 
     # ── Stars / Binance ───────────────────────────────────
@@ -210,6 +226,9 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(deposit_callback,          pattern="^deposit$"))
     app.add_handler(CallbackQueryHandler(charge_usdt_menu_callback, pattern="^charge_usdt_menu$"))
     app.add_handler(CallbackQueryHandler(check_sub_callback,        pattern="^check_sub$"))
+    app.add_handler(CallbackQueryHandler(choose_language_callback,  pattern="^choose_language$"))
+    app.add_handler(CallbackQueryHandler(set_lang_callback,         pattern=r"^set_lang_(ar|en)_.+$"))
+    app.add_handler(CallbackQueryHandler(instructions_callback,     pattern="^instructions$"))
 
     # ━━━━━━━━━━━━━━━━━━━━━━ SMS ━━━━━━━━━━━━━━━━━━━━━━━━━━━
     app.add_handler(CallbackQueryHandler(sms_countries_callback, pattern="^sms_countries$"))
@@ -355,6 +374,17 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_force_del_callback,     pattern="^adm_force_del$"))
     app.add_handler(CallbackQueryHandler(adm_force_delone_callback,  pattern=r"^adm_force_delone_\d+$"))
     app.add_handler(CallbackQueryHandler(adm_force_clear_callback,   pattern="^adm_force_clear$"))
+
+    # Admin — التعليمات
+    app.add_handler(CallbackQueryHandler(adm_cfg_instructions_callback,    pattern="^adm_cfg_instructions$"))
+    app.add_handler(CallbackQueryHandler(adm_set_instructions_ar_callback, pattern="^adm_set_instructions_ar$"))
+    app.add_handler(CallbackQueryHandler(adm_set_instructions_en_callback, pattern="^adm_set_instructions_en$"))
+
+    # Admin — روابط
+    app.add_handler(CallbackQueryHandler(adm_cfg_links_callback,           pattern="^adm_cfg_links$"))
+    app.add_handler(CallbackQueryHandler(adm_set_link_activation_callback, pattern="^adm_set_link_activation$"))
+    app.add_handler(CallbackQueryHandler(adm_set_link_main_callback,       pattern="^adm_set_link_main$"))
+    app.add_handler(CallbackQueryHandler(adm_set_link_support_callback,    pattern="^adm_set_link_support$"))
 
     # Admin — السعر الافتراضي
     async def _adm_default_price(u, c):
