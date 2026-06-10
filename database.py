@@ -435,10 +435,20 @@ class Database:
             today   = conn.execute(
                 "SELECT COUNT(*) FROM orders WHERE status='completed' AND date(created_at)=date('now')"
             ).fetchone()[0]
+            # SMS
+            sms_orders    = conn.execute("SELECT COUNT(*) FROM sms_orders").fetchone()[0]
+            sms_completed = conn.execute("SELECT COUNT(*) FROM sms_orders WHERE status='completed'").fetchone()[0]
+            sms_revenue   = conn.execute("SELECT COALESCE(SUM(cost),0) FROM sms_orders WHERE status='completed'").fetchone()[0]
+            sms_today     = conn.execute(
+                "SELECT COUNT(*) FROM sms_orders WHERE status='completed' AND date(created_at)=date('now')"
+            ).fetchone()[0]
+            sms_avail     = conn.execute("SELECT COUNT(*) FROM sms_numbers WHERE status='available'").fetchone()[0]
         return {
             "users": users, "banned": banned, "numbers": nums,
             "available": avail, "sold": sold,
             "revenue": revenue, "orders": orders, "today": today,
+            "sms_orders": sms_orders, "sms_completed": sms_completed,
+            "sms_revenue": sms_revenue, "sms_today": sms_today, "sms_avail": sms_avail,
         }
 
     # ══ SMS Numbers ═══════════════════════════════════════
