@@ -84,20 +84,51 @@ async def adm_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         revenue_month = conn.execute(
             "SELECT COALESCE(SUM(cost),0) FROM orders WHERE status='completed' AND created_at >= date('now','-30 days')"
         ).fetchone()[0]
+        revenue_today = conn.execute(
+            "SELECT COALESCE(SUM(cost),0) FROM orders WHERE status='completed' AND date(created_at)=date('now')"
+        ).fetchone()[0]
         top_countries = conn.execute(
             "SELECT country_flag, country_name, COUNT(*) as c FROM orders GROUP BY country_code ORDER BY c DESC LIMIT 5"
         ).fetchall()
-    text  = "📊 <b>إحصائيات مفصّلة</b>\n\n"
-    text += "💰 إيرادات اليوم: <b>${:.2f}</b>\n".format(stats["today"] * 0)  # placeholder
-    text += "💰 إيرادات الأسبوع: <b>${:.2f}</b>\n".format(revenue_week)
-    text += "💰 إيرادات الشهر: <b>${:.2f}</b>\n".format(revenue_month)
-    text += "💰 إجمالي: <b>${:.2f}</b>\n\n".format(stats["revenue"])
-    text += "👥 إجمالي المستخدمين: <b>{}</b>\n".format(stats["users"])
-    text += "📦 إجمالي الطلبات: <b>{}</b>\n\n".format(stats["orders"])
+        # SMS orders
+        sms_total = conn.execute(
+            "SELECT COUNT(*) FROM sms_orders"
+        ).fetchone()[0]
+        sms_completed = conn.execute(
+            "SELECT COUNT(*) FROM sms_orders WHERE status='completed'"
+        ).fetchone()[0]
+        sms_revenue = conn.execute(
+            "SELECT COALESCE(SUM(cost),0) FROM sms_orders WHERE status='completed'"
+        ).fetchone()[0]
+        sms_today = conn.execute(
+            "SELECT COALESCE(SUM(cost),0) FROM sms_orders WHERE status='completed' AND date(created_at)=date('now')"
+        ).fetchone()[0]
+        sms_week = conn.execute(
+            "SELECT COALESCE(SUM(cost),0) FROM sms_orders WHERE status='completed' AND created_at >= date('now','-7 days')"
+        ).fetchone()[0]
+        sms_avail = conn.execute(
+            "SELECT COUNT(*) FROM sms_numbers WHERE status='available'"
+        ).fetchone()[0]
+
+    total_revenue_today = revenue_today + sms_today
+    total_revenue_week  = revenue_week  + sms_week
+    total_revenue_all   = stats["revenue"] + sms_revenue
+
+    text  = "📊 <b>الإحصائيات</b>\n\n"
+    text += "━━━━ 💰 الإيرادات ━━━━\n"
+    text += "📅 اليوم:   <b>${:.2f}</b>\n".format(total_revenue_today)
+    text += "📆 الأسبوع: <b>${:.2f}</b>\n".format(total_revenue_week)
+    text += "🗂 الإجمالي: <b>${:.2f}</b>\n\n".format(total_revenue_all)
+    text += "━━━━ 📦 الطلبات ━━━━\n"
+    text += "📱 أرقام تيليجرام: <b>{}</b>\n".format(stats["orders"])
+    text += "💬 أرقام SMS: <b>{}</b> (مكتمل: {})\n".format(sms_total, sms_completed)
+    text += "📲 SMS متاح: <b>{}</b>\n\n".format(sms_avail)
+    text += "━━━━ 👥 المستخدمون ━━━━\n"
+    text += "إجمالي: <b>{}</b>\n".format(stats["users"])
     if top_countries:
-        text += "🏆 <b>أكثر الدول مبيعاً:</b>\n"
+        text += "\n━━━━ 🏆 أكثر الدول ━━━━\n"
         for r in top_countries:
-            text += "  {} {} — <b>{}</b> طلب\n".format(r[0], r[1], r[2])
+            text += "  {} {} — <b>{}</b>\n".format(r[0], r[1], r[2])
     await update.callback_query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")]]),
