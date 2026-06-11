@@ -128,18 +128,20 @@ async def adm_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     total_revenue_today = revenue_today + sms_today
     total_revenue_week  = revenue_week  + sms_week
     total_revenue_all   = stats["revenue"] + sms_revenue
+    total_users_bal     = db.get_total_users_balance()
 
     text  = "📊 <b>الإحصائيات</b>\n\n"
     text += "━━━━ 💰 الإيرادات ━━━━\n"
-    text += "📅 اليوم:   <b>${:.2f}</b>\n".format(total_revenue_today)
-    text += "📆 الأسبوع: <b>${:.2f}</b>\n".format(total_revenue_week)
+    text += "📅 اليوم:    <b>${:.2f}</b>\n".format(total_revenue_today)
+    text += "📆 الأسبوع:  <b>${:.2f}</b>\n".format(total_revenue_week)
     text += "🗂 الإجمالي: <b>${:.2f}</b>\n\n".format(total_revenue_all)
     text += "━━━━ 📦 الطلبات ━━━━\n"
-    text += "📱 أرقام تيليجرام: <b>{}</b>\n".format(stats["orders"])
+    text += "📱 أرقام TG:  <b>{}</b>\n".format(stats["orders"])
     text += "💬 أرقام SMS: <b>{}</b> (مكتمل: {})\n".format(sms_total, sms_completed)
-    text += "📲 SMS متاح: <b>{}</b>\n\n".format(sms_avail)
+    text += "📲 SMS متاح:  <b>{}</b>\n\n".format(sms_avail)
     text += "━━━━ 👥 المستخدمون ━━━━\n"
     text += "إجمالي: <b>{}</b>\n".format(stats["users"])
+    text += "💳 إجمالي رصيد المستخدمين: <b>${:.2f}</b>\n".format(total_users_bal)
     if top_countries:
         text += "\n━━━━ 🏆 أكثر الدول ━━━━\n"
         for r in top_countries:
@@ -668,6 +670,10 @@ ADMIN_STATES = (
     "waiting_force_channel",
     "waiting_instructions_ar", "waiting_instructions_en",
     "waiting_link_activation", "waiting_link_main", "waiting_link_support",
+    "waiting_coupon_create",
+    "waiting_discount_add",
+    "waiting_ref_pct", "waiting_ref_min",
+    "waiting_report_ch", "waiting_restore_backup",
 )
 
 
@@ -804,6 +810,10 @@ async def adm_settings_callback(update: Update, context: ContextTypes.DEFAULT_TY
             [InlineKeyboardButton("📌 اشتراك إجباري",    callback_data="adm_cfg_force_sub")],
             [InlineKeyboardButton("📖 التعليمات",         callback_data="adm_cfg_instructions")],
             [InlineKeyboardButton("🔗 روابط وقنوات",     callback_data="adm_cfg_links")],
+            [InlineKeyboardButton("🎟️ الكوبونات",        callback_data="adm_coupons")],
+            [InlineKeyboardButton("🏷️ الخصم التلقائي",   callback_data="adm_discounts")],
+            [InlineKeyboardButton("🤝 الإحالة",           callback_data="adm_referral_settings")],
+            [InlineKeyboardButton("📊 التقارير والبكاب",  callback_data="adm_report_settings")],
             [InlineKeyboardButton("🔙 رجوع",              callback_data="adm_main")],
         ]),
         parse_mode="HTML"
@@ -1614,3 +1624,339 @@ async def adm_links_msg_handler(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop("adm_state", None)
     await update.message.reply_text("✅ تم حفظ رابط <b>{}</b>.".format(label), parse_mode="HTML")
     return True
+
+
+# ══════════════════════════════════════════════════════════
+#  الكوبونات — لوحة الأدمن
+# ══════════════════════════════════════════════════════════
+
+async def adm_coupons_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    coupons = db.get_all_coupons()
+    text    = "🎟️ <b>الكوبونات</b>\n\n"
+    if not coupons:
+        text += "لا توجد كوبونات بعد.\n"
+    for c in coupons[:10]:
+        status = "✅" if c["is_active"] else "❌"
+        t_type = "{}%".format(c["value"]) if c["type"] == "percent" else "${:.2f}".format(c["value"])
+        exp    = c["expires_at"] or "∞"
+        text  += "{} <code>{}</code> — {} — {}/{} استخدام — ينتهي: {}\n".format(
+            status, c["code"], t_type, c["used_count"], c["max_uses"], exp
+        )
+    await update.callback_query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ إنشاء كوبون",    callback_data="adm_coupon_create")],
+            [InlineKeyboardButton("🗑 حذف كوبون",      callback_data="adm_coupon_del")],
+            [InlineKeyboardButton("🔙 رجوع",            callback_data="adm_settings")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_coupon_create_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_coupon_create"
+    await update.callback_query.edit_message_text(
+        "➕ <b>إنشاء كوبون جديد</b>\n\n"
+        "أرسل البيانات بالصيغة:\n\n"
+        "<code>الكود | النوع | القيمة | عدد الاستخدامات | تاريخ الانتهاء</code>\n\n"
+        "<b>أمثلة:</b>\n"
+        "<code>SAVE20 | percent | 20 | 100 | 2026-12-31</code>\n"
+        "<code>GIFT5 | fixed | 5 | 1 | -</code>\n\n"
+        "• النوع: <b>percent</b> (نسبة) أو <b>fixed</b> (مبلغ ثابت)\n"
+        "• تاريخ الانتهاء: YYYY-MM-DD أو - بدون انتهاء",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_coupons")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_coupon_del_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    coupons = [c for c in db.get_all_coupons()]
+    if not coupons:
+        await update.callback_query.answer("لا توجد كوبونات", show_alert=True)
+        return
+    rows = [[InlineKeyboardButton(
+        "🗑 {} — {}".format(c["code"], "✅" if c["is_active"] else "❌"),
+        callback_data="adm_coupon_delone_{}".format(c["id"])
+    )] for c in coupons[:15]]
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_coupons")])
+    await update.callback_query.edit_message_text(
+        "🗑 اختر الكوبون للحذف:",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="HTML"
+    )
+
+
+async def adm_coupon_delone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    cid = int(update.callback_query.data.replace("adm_coupon_delone_", ""))
+    context.bot_data["db"].delete_coupon(cid)
+    await update.callback_query.answer("✅ تم الحذف", show_alert=True)
+    update.callback_query.data = "adm_coupons"
+    await adm_coupons_callback(update, context)
+
+
+async def adm_coupon_create_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if context.user_data.get("adm_state") != "waiting_coupon_create":
+        return False
+    context.user_data.pop("adm_state", None)
+    parts = [p.strip() for p in (update.message.text or "").split("|")]
+    if len(parts) < 4:
+        await update.message.reply_text("❌ الصيغة غير صحيحة.")
+        return True
+    code     = parts[0].upper()
+    type_    = parts[1].lower()
+    try:    value = float(parts[2])
+    except: await update.message.reply_text("❌ القيمة غير صحيحة."); return True
+    try:    max_uses = int(parts[3])
+    except: max_uses = 1
+    expires = parts[4] if len(parts) > 4 and parts[4] != "-" else None
+    if type_ not in ("percent", "fixed"):
+        await update.message.reply_text("❌ النوع يجب أن يكون percent أو fixed.")
+        return True
+    ok = context.bot_data["db"].create_coupon(code, type_, value, max_uses, expires)
+    if ok:
+        await update.message.reply_text(
+            "✅ تم إنشاء الكوبون <code>{}</code>".format(code), parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text("❌ الكوبون موجود بالفعل.")
+    return True
+
+
+# ══════════════════════════════════════════════════════════
+#  نظام الخصم التلقائي — لوحة الأدمن
+# ══════════════════════════════════════════════════════════
+
+async def adm_discounts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db        = context.bot_data["db"]
+    discounts = db.get_discounts()
+    text      = "🏷️ <b>نظام الخصم التلقائي</b>\n\n"
+    text     += "يُطبَّق خصم تلقائي بناءً على عدد طلبات المستخدم:\n\n"
+    if not discounts:
+        text += "لا توجد خصومات مضافة بعد.\n"
+    for d in discounts:
+        text += "• بعد <b>{}</b> طلب → خصم <b>{}%</b>\n".format(d["orders"], d["percent"])
+    await update.callback_query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ إضافة خصم",  callback_data="adm_discount_add")],
+            [InlineKeyboardButton("🗑 مسح الكل",   callback_data="adm_discount_clear")],
+            [InlineKeyboardButton("🔙 رجوع",        callback_data="adm_settings")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_discount_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_discount_add"
+    await update.callback_query.edit_message_text(
+        "➕ <b>إضافة خصم تلقائي</b>\n\n"
+        "أرسل:\n<code>عدد الطلبات | نسبة الخصم%</code>\n\n"
+        "مثال: <code>10 | 5</code> ← خصم 5% بعد 10 طلبات",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_discounts")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_discount_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.bot_data["db"].set_discounts([])
+    await update.callback_query.answer("✅ تم مسح الخصومات", show_alert=True)
+    update.callback_query.data = "adm_discounts"
+    await adm_discounts_callback(update, context)
+
+
+async def adm_discount_add_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if context.user_data.get("adm_state") != "waiting_discount_add":
+        return False
+    context.user_data.pop("adm_state", None)
+    parts = [p.strip() for p in (update.message.text or "").split("|")]
+    try:
+        orders  = int(parts[0])
+        percent = float(parts[1])
+    except Exception:
+        await update.message.reply_text("❌ الصيغة غير صحيحة."); return True
+    db        = context.bot_data["db"]
+    discounts = db.get_discounts()
+    discounts = [d for d in discounts if d["orders"] != orders]
+    discounts.append({"orders": orders, "percent": percent})
+    db.set_discounts(discounts)
+    await update.message.reply_text(
+        "✅ خصم {}% بعد {} طلب".format(percent, orders)
+    )
+    return True
+
+
+# ══════════════════════════════════════════════════════════
+#  الإحالة — لوحة الأدمن
+# ══════════════════════════════════════════════════════════
+
+async def adm_referral_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    pct     = db.get_setting("referral_percent",     "10")
+    min_wd  = db.get_setting("referral_min_withdraw", "1.0")
+    await update.callback_query.edit_message_text(
+        "🤝 <b>إعدادات الإحالة</b>\n\n"
+        "💰 نسبة الكسب: <b>{}%</b>\n"
+        "💳 الحد الأدنى للسحب: <b>${}</b>".format(pct, min_wd),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ تغيير النسبة",        callback_data="adm_ref_set_pct")],
+            [InlineKeyboardButton("✏️ تغيير الحد الأدنى",   callback_data="adm_ref_set_min")],
+            [InlineKeyboardButton("🔙 رجوع",                 callback_data="adm_settings")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_ref_set_pct_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_ref_pct"
+    await update.callback_query.edit_message_text(
+        "أرسل نسبة الإحالة (مثال: <code>10</code> = 10%)",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_referral_settings")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_ref_set_min_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_ref_min"
+    await update.callback_query.edit_message_text(
+        "أرسل الحد الأدنى للسحب (مثال: <code>1.0</code>)",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_referral_settings")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_ref_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    state = context.user_data.get("adm_state")
+    if state not in ("waiting_ref_pct", "waiting_ref_min"):
+        return False
+    val = (update.message.text or "").strip().replace(",", ".")
+    try:    num = float(val)
+    except: await update.message.reply_text("❌ أرسل رقم صحيح."); return True
+    db = context.bot_data["db"]
+    if state == "waiting_ref_pct":
+        db.set_setting("referral_percent", str(num))
+        await update.message.reply_text("✅ نسبة الإحالة = {}%".format(num))
+    else:
+        db.set_setting("referral_min_withdraw", str(num))
+        await update.message.reply_text("✅ الحد الأدنى للسحب = ${}".format(num))
+    context.user_data.pop("adm_state", None)
+    return True
+
+
+# ══════════════════════════════════════════════════════════
+#  قناة التقارير اليومية + النسخ الاحتياطي — لوحة الأدمن
+# ══════════════════════════════════════════════════════════
+
+async def adm_report_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    ch      = db.get_setting("admin_report_channel", "").strip() or "غير محدد"
+    await update.callback_query.edit_message_text(
+        "📊 <b>التقارير والنسخ الاحتياطي</b>\n\n"
+        "📢 قناة التقارير: <code>{}</code>\n\n"
+        "• التقرير اليومي يُرسَل تلقائياً الساعة 12 منتصف الليل\n"
+        "• النسخ الاحتياطي كل 6 ساعات".format(ch),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 تعيين قناة التقارير",   callback_data="adm_set_report_ch")],
+            [InlineKeyboardButton("📊 إرسال تقرير الآن",      callback_data="adm_send_report_now")],
+            [InlineKeyboardButton("💾 نسخة احتياطية الآن",   callback_data="adm_backup_now")],
+            [InlineKeyboardButton("📤 رفع نسخة احتياطية",    callback_data="adm_restore_backup")],
+            [InlineKeyboardButton("🔙 رجوع",                   callback_data="adm_settings")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_set_report_ch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_report_ch"
+    await update.callback_query.edit_message_text(
+        "أرسل <b>ID قناة التقارير</b> (مثال: <code>-1001234567890</code>)\n"
+        "تأكد إن البوت أدمن فيها.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_report_settings")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_send_report_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    from features import send_daily_report
+    await update.callback_query.answer("📊 جارٍ الإرسال...", show_alert=False)
+    await send_daily_report(context.bot, context.bot_data["db"])
+    await update.callback_query.answer("✅ تم إرسال التقرير", show_alert=True)
+
+
+async def adm_backup_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    from features import make_backup
+    import datetime
+    await update.callback_query.answer("💾 جارٍ النسخ...", show_alert=False)
+    try:
+        db   = context.bot_data["db"]
+        path = make_backup(db._path)
+        await context.bot.send_document(
+            chat_id=update.effective_user.id,
+            document=open(path, "rb"),
+            filename="backup_{}.db".format(datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")),
+            caption="💾 <b>نسخة احتياطية يدوية</b>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await update.callback_query.answer("❌ {}".format(e), show_alert=True)
+
+
+async def adm_restore_backup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_restore_backup"
+    await update.callback_query.edit_message_text(
+        "📤 <b>رفع نسخة احتياطية</b>\n\n"
+        "أرسل ملف <code>.db</code> وسيتم استبدال قاعدة البيانات الحالية.\n\n"
+        "⚠️ <b>تحذير:</b> سيتم إيقاف البوت وإعادة تشغيله بعد الاستعادة.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_report_settings")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_report_ch_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    state = context.user_data.get("adm_state")
+    if state == "waiting_report_ch":
+        val = (update.message.text or "").strip()
+        try:    int(val)
+        except: await update.message.reply_text("❌ ID غير صحيح."); return True
+        context.bot_data["db"].set_setting("admin_report_channel", val)
+        context.user_data.pop("adm_state", None)
+        await update.message.reply_text("✅ تم تعيين قناة التقارير.")
+        return True
+    if state == "waiting_restore_backup":
+        doc = update.message.document
+        if not doc or not (doc.file_name or "").endswith(".db"):
+            await update.message.reply_text("❌ يجب أن يكون الملف بصيغة .db")
+            return True
+        import shutil, os
+        context.user_data.pop("adm_state", None)
+        db   = context.bot_data["db"]
+        file = await doc.get_file()
+        data = await file.download_as_bytearray()
+        # نسخة احتياطية للحالية قبل الاستبدال
+        from features import make_backup
+        make_backup(db._path)
+        with open(db._path, "wb") as f:
+            f.write(bytes(data))
+        await update.message.reply_text(
+            "✅ <b>تم استعادة قاعدة البيانات!</b>\n\n"
+            "⚡ يرجى إعادة تشغيل البوت يدوياً.",
+            parse_mode="HTML"
+        )
+        return True
+    return False
