@@ -113,6 +113,32 @@ class Database:
                     country    TEXT PRIMARY KEY,
                     price      REAL NOT NULL DEFAULT 0.5
                 );
+                CREATE TABLE IF NOT EXISTS coupons (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code       TEXT UNIQUE NOT NULL,
+                    type       TEXT NOT NULL,
+                    value      REAL NOT NULL,
+                    max_uses   INTEGER DEFAULT 1,
+                    used_count INTEGER DEFAULT 0,
+                    expires_at TEXT,
+                    is_active  INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS coupon_uses (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    coupon_id  INTEGER NOT NULL,
+                    user_tg_id INTEGER NOT NULL,
+                    used_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(coupon_id, user_tg_id)
+                );
+                CREATE TABLE IF NOT EXISTS referrals (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    referrer_id  INTEGER NOT NULL,
+                    referred_id  INTEGER NOT NULL UNIQUE,
+                    earned       REAL DEFAULT 0.0,
+                    pending      REAL DEFAULT 0.0,
+                    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             # migrate: add is_banned if not exist
             cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
@@ -640,3 +666,173 @@ class Database:
     def set_onboarded(self, tg_id: int):
         with self._conn() as conn:
             conn.execute("UPDATE users SET onboarded=1 WHERE tg_id=?", (tg_id,))
+
+    # ══ Coupons ═══════════════════════════════════════════
+    def create_coupon(self, code: str, type_: str, value: float,
+                      max_uses: int = 1, expires_at: str = None) -> bool:
+        """type_: 'fixed' أو 'percent'"""
+        try:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT INTO coupons(code,type,value,max_uses,expires_at) VALUES(?,?,?,?,?)",
+                    (code.upper(), type_, value, max_uses, expires_at)
+                )
+            return True
+        except Exception:
+            return False
+
+    def get_coupon(self, code: str) -> dict | None:
+        with self._conn() as conn:
+            r = conn.execute(
+                "SELECT * FROM coupons WHERE code=? AND is_active=1", (code.upper(),)
+            ).fetchone()
+            return dict(r) if r else None
+
+    def use_coupon(self, code: str, user_tg_id: int, balance_to_add: float) -> tuple:
+        """يطبق الكوبون. يرجع (True, discount) أو (False, reason)"""
+        import datetime as _dt
+        with self._conn() as conn:
+            r = conn.execute(
+                "SELECT * FROM coupons WHERE code=? AND is_active=1", (code.upper(),)
+            ).fetchone()
+            if not r:
+                return False, "الكوبون غير موجود أو غير فعال"
+            c = dict(r)
+            if c["expires_at"] and _dt.datetime.utcnow().strftime("%Y-%m-%d") > c["expires_at"]:
+                return False, "انتهت صلاحية الكوبون"
+            if c["used_count"] >= c["max_uses"]:
+                return False, "تجاوز الكوبون الحد الأقصى للاستخدام"
+            used = conn.execute(
+                "SELECT id FROM coupon_uses WHERE coupon_id=? AND user_tg_id=?",
+                (c["id"], user_tg_id)
+            ).fetchone()
+            if used:
+                return False, "استخدمت هذا الكوبون من قبل"
+            # احسب الخصم
+            if c["type"] == "percent":
+                discount = round(balance_to_add * c["value"] / 100, 4)
+            else:
+                discount = c["value"]
+            # سجّل الاستخدام
+            conn.execute(
+                "INSERT INTO coupon_uses(coupon_id, user_tg_id) VALUES(?,?)",
+                (c["id"], user_tg_id)
+            )
+            conn.execute(
+                "UPDATE coupons SET used_count=used_count+1 WHERE id=?", (c["id"],)
+            )
+            return True, discount
+
+    def get_all_coupons(self) -> list:
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM coupons ORDER BY id DESC"
+            ).fetchall()]
+
+    def toggle_coupon(self, coupon_id: int):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE coupons SET is_active=1-is_active WHERE id=?", (coupon_id,)
+            )
+
+    def delete_coupon(self, coupon_id: int):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM coupon_uses WHERE coupon_id=?", (coupon_id,))
+            conn.execute("DELETE FROM coupons WHERE id=?", (coupon_id,))
+
+    # ══ Discounts (خصم تلقائي على عدد طلبات) ════════════
+    def get_discounts(self) -> list:
+        """يرجع قائمة الخصومات مرتبة تصاعدياً بعدد الطلبات"""
+        raw = self.get_setting("auto_discounts", "[]")
+        try:
+            import json as _j
+            return sorted(_j.loads(raw), key=lambda x: x["orders"])
+        except Exception:
+            return []
+
+    def set_discounts(self, discounts: list):
+        import json as _j
+        self.set_setting("auto_discounts", _j.dumps(discounts))
+
+    def get_user_discount(self, user_tg_id: int) -> float:
+        """يرجع نسبة خصم المستخدم (0.0 - 100.0)"""
+        with self._conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE user_tg_id=? AND status='completed'",
+                (user_tg_id,)
+            ).fetchone()[0]
+            sms_total = conn.execute(
+                "SELECT COUNT(*) FROM sms_orders WHERE user_tg_id=? AND status='completed'",
+                (user_tg_id,)
+            ).fetchone()[0]
+        count    = total + sms_total
+        discount = 0.0
+        for d in self.get_discounts():
+            if count >= d["orders"]:
+                discount = d["percent"]
+        return discount
+
+    # ══ Referrals ═════════════════════════════════════════
+    def set_referrer(self, referred_id: int, referrer_id: int) -> bool:
+        """يسجّل من أحضر المستخدم — مرة واحدة فقط"""
+        if referred_id == referrer_id:
+            return False
+        try:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO referrals(referrer_id, referred_id) VALUES(?,?)",
+                    (referrer_id, referred_id)
+                )
+            return True
+        except Exception:
+            return False
+
+    def get_referrer(self, referred_id: int) -> int | None:
+        with self._conn() as conn:
+            r = conn.execute(
+                "SELECT referrer_id FROM referrals WHERE referred_id=?", (referred_id,)
+            ).fetchone()
+            return r[0] if r else None
+
+    def add_referral_earning(self, referrer_id: int, amount: float):
+        """يضيف أرباح للمُحيل في الرصيد المعلّق"""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE referrals SET pending=pending+?, earned=earned+? WHERE referrer_id=?",
+                (amount, amount, referrer_id)
+            )
+
+    def get_referral_stats(self, user_tg_id: int) -> dict:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(pending),0), COALESCE(SUM(earned),0), COUNT(*) "
+                "FROM referrals WHERE referrer_id=?", (user_tg_id,)
+            ).fetchone()
+            pending  = float(row[0]) if row else 0.0
+            earned   = float(row[1]) if row else 0.0
+            count    = int(row[2])   if row else 0
+        return {"pending": pending, "earned": earned, "count": count}
+
+    def withdraw_referral(self, user_tg_id: int) -> float:
+        """يحوّل الرصيد المعلّق إلى رصيد قابل للاستخدام"""
+        min_wd = float(self.get_setting("referral_min_withdraw", "1.0"))
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(pending),0) FROM referrals WHERE referrer_id=?",
+                (user_tg_id,)
+            ).fetchone()
+            pending = float(row[0]) if row else 0.0
+            if pending < min_wd:
+                return 0.0
+            conn.execute(
+                "UPDATE referrals SET pending=0 WHERE referrer_id=?", (user_tg_id,)
+            )
+            conn.execute(
+                "UPDATE users SET balance=balance+? WHERE tg_id=?", (pending, user_tg_id)
+            )
+        return pending
+
+    def get_total_users_balance(self) -> float:
+        with self._conn() as conn:
+            r = conn.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()
+            return float(r[0]) if r else 0.0

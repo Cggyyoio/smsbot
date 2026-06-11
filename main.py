@@ -56,7 +56,12 @@ async def message_router(update: Update, context):
         adm_force_channel_msg_handler,
         adm_instructions_msg_handler,
         adm_links_msg_handler,
+        adm_coupon_create_msg_handler,
+        adm_discount_add_msg_handler,
+        adm_ref_msg_handler,
+        adm_report_ch_msg_handler,
     )
+    from handlers.coupon import coupon_msg_handler
     from handlers.stars_binance_pay import (
         stars_amount_message_handler,
         binance_message_handler,
@@ -120,7 +125,27 @@ async def message_router(update: Update, context):
     if await adm_links_msg_handler(update, context):
         return
 
-    # ⑪ إعدادات الأدمن (آخر شيء)
+    # ⑪ كوبونات الأدمن
+    if await adm_coupon_create_msg_handler(update, context):
+        return
+
+    # ⑫ الخصومات التلقائية
+    if await adm_discount_add_msg_handler(update, context):
+        return
+
+    # ⑬ إعدادات الإحالة
+    if await adm_ref_msg_handler(update, context):
+        return
+
+    # ⑭ قناة التقارير + استعادة نسخة
+    if await adm_report_ch_msg_handler(update, context):
+        return
+
+    # ⑮ كوبون المستخدم
+    if await coupon_msg_handler(update, context):
+        return
+
+    # ⑯ إعدادات الأدمن (آخر شيء)
     await adm_price_msg_handler(update, context)
 
 
@@ -130,6 +155,17 @@ async def message_router(update: Update, context):
 
 async def start_cmd(update: Update, context):
     from handlers.user import start_callback
+    db   = context.bot_data["db"]
+    args = context.args or []
+    user = update.effective_user
+    # معالجة رابط الإحالة
+    if args and args[0].startswith("ref"):
+        try:
+            referrer_id = int(args[0][3:])
+            db.ensure_user(user.id, user.username, user.first_name)
+            db.set_referrer(user.id, referrer_id)
+        except Exception:
+            pass
     await start_callback(update, context)
 
 
@@ -386,6 +422,41 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_set_link_main_callback,       pattern="^adm_set_link_main$"))
     app.add_handler(CallbackQueryHandler(adm_set_link_support_callback,    pattern="^adm_set_link_support$"))
 
+    # Admin — كوبونات
+    from handlers.admin.panel import (
+        adm_coupons_callback, adm_coupon_create_callback, adm_coupon_del_callback,
+        adm_coupon_delone_callback, adm_discounts_callback, adm_discount_add_callback,
+        adm_discount_clear_callback, adm_referral_settings_callback,
+        adm_ref_set_pct_callback, adm_ref_set_min_callback,
+        adm_report_settings_callback, adm_set_report_ch_callback,
+        adm_send_report_now_callback, adm_backup_now_callback, adm_restore_backup_callback,
+    )
+    app.add_handler(CallbackQueryHandler(adm_coupons_callback,          pattern="^adm_coupons$"))
+    app.add_handler(CallbackQueryHandler(adm_coupon_create_callback,    pattern="^adm_coupon_create$"))
+    app.add_handler(CallbackQueryHandler(adm_coupon_del_callback,       pattern="^adm_coupon_del$"))
+    app.add_handler(CallbackQueryHandler(adm_coupon_delone_callback,    pattern=r"^adm_coupon_delone_\d+$"))
+    app.add_handler(CallbackQueryHandler(adm_discounts_callback,        pattern="^adm_discounts$"))
+    app.add_handler(CallbackQueryHandler(adm_discount_add_callback,     pattern="^adm_discount_add$"))
+    app.add_handler(CallbackQueryHandler(adm_discount_clear_callback,   pattern="^adm_discount_clear$"))
+    app.add_handler(CallbackQueryHandler(adm_referral_settings_callback,pattern="^adm_referral_settings$"))
+    app.add_handler(CallbackQueryHandler(adm_ref_set_pct_callback,      pattern="^adm_ref_set_pct$"))
+    app.add_handler(CallbackQueryHandler(adm_ref_set_min_callback,      pattern="^adm_ref_set_min$"))
+    app.add_handler(CallbackQueryHandler(adm_report_settings_callback,  pattern="^adm_report_settings$"))
+    app.add_handler(CallbackQueryHandler(adm_set_report_ch_callback,    pattern="^adm_set_report_ch$"))
+    app.add_handler(CallbackQueryHandler(adm_send_report_now_callback,  pattern="^adm_send_report_now$"))
+    app.add_handler(CallbackQueryHandler(adm_backup_now_callback,       pattern="^adm_backup_now$"))
+    app.add_handler(CallbackQueryHandler(adm_restore_backup_callback,   pattern="^adm_restore_backup$"))
+
+    # User — إحالة
+    from handlers.referral import referral_callback, referral_withdraw_callback, referral_noop_callback
+    app.add_handler(CallbackQueryHandler(referral_callback,          pattern="^referral_menu$"))
+    app.add_handler(CallbackQueryHandler(referral_withdraw_callback, pattern="^referral_withdraw$"))
+    app.add_handler(CallbackQueryHandler(referral_noop_callback,     pattern="^referral_noop$"))
+
+    # User — كوبون شحن
+    from handlers.coupon import coupon_callback
+    app.add_handler(CallbackQueryHandler(coupon_callback, pattern="^use_coupon$"))
+
     # Admin — السعر الافتراضي
     async def _adm_default_price(u, c):
         c.user_data["adm_state"] = "waiting_default_price"
@@ -487,6 +558,11 @@ async def main():
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True
         )
+        # Background loops
+        from features import daily_report_loop, backup_loop
+        asyncio.create_task(daily_report_loop(app.bot, db))
+        asyncio.create_task(backup_loop(app.bot, db))
+
         await asyncio.Event().wait()
         await app.updater.stop()
         await app.stop()
