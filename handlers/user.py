@@ -33,6 +33,20 @@ def _lang(db, uid: int) -> str:
 #  إشعار قناة التفعيلات (موحّد)
 # ──────────────────────────────────────────────────────────
 
+def _apply_referral_earning(db, user_id: int, order_cost: float):
+    """يضيف أرباح للمُحيل عند كل طلب"""
+    try:
+        referrer = db.get_referrer(user_id)
+        if not referrer:
+            return
+        pct     = float(db.get_setting("referral_percent", "10"))
+        earning = round(order_cost * pct / 100, 4)
+        if earning > 0:
+            db.add_referral_earning(referrer, earning)
+    except Exception:
+        pass
+
+
 def _mask_phone(phone: str) -> str:
     digits = str(phone).lstrip("+")
     return "+" + digits[:4] + "★★★"
@@ -91,7 +105,12 @@ def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(t("btn_orders",       lang), callback_data="my_orders"),
             InlineKeyboardButton(t("btn_instructions", lang), callback_data="instructions"),
         ],
-        [InlineKeyboardButton(t("btn_language", lang), callback_data="choose_language")],
+        [
+            InlineKeyboardButton("💰 ربح رصيد" if lang == "ar" else "💰 Earn Balance",
+                                 callback_data="referral_menu"),
+            InlineKeyboardButton("🌐 تغيير اللغة" if lang == "ar" else "🌐 Language",
+                                 callback_data="choose_language"),
+        ],
     ]
     if db:
         act_link  = db.get_setting("activation_channel_link", "").strip()
@@ -101,7 +120,7 @@ def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
         if act_link:  ch_row.append(InlineKeyboardButton(t("btn_activation_ch", lang), url=act_link))
         if main_link: ch_row.append(InlineKeyboardButton(t("btn_main_ch",       lang), url=main_link))
         if ch_row: rows.append(ch_row)
-        if sup_link:  rows.append([InlineKeyboardButton(t("btn_support", lang),        url=sup_link)])
+        if sup_link:  rows.append([InlineKeyboardButton(t("btn_support", lang), url=sup_link)])
     return InlineKeyboardMarkup(rows)
 
 # ──────────────────────────────────────────────────────────
@@ -386,7 +405,13 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await _answer(q, t("banned_short", lang), True); return
 
     price = db.get_price(cc)
-    num   = db.get_available_number(cc)
+
+    # خصم تلقائي بناءً على عدد الطلبات
+    disc_pct = db.get_user_discount(user.id)
+    if disc_pct > 0:
+        price = round(price * (1 - disc_pct / 100), 4)
+
+    num = db.get_available_number(cc)
 
     if not num:
         await _answer(q, t("sold_out", lang, flag="", name="").strip(), True); return
@@ -429,7 +454,10 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if otp_l:
         await otp_l.attach_order(num["phone"], order_id)
 
-    # إشعار القناة عند الشراء — الكود يتحدث لما يوصل في otp_listener
+    # إشعار المُحيل
+    _apply_referral_earning(db, user.id, price)
+
+    # إشعار القناة عند الشراء
     await _send_notify(
         context.bot, db,
         app_type="تيليجرام",
@@ -540,6 +568,10 @@ async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ton_on:     rows.append([InlineKeyboardButton(t("btn_ton",     lang), callback_data="charge_ton")])
     if vod_on:     rows.append([InlineKeyboardButton(t("btn_vod",     lang), callback_data="charge_vodafone")])
     if not rows:   rows.append([InlineKeyboardButton(t("no_payment",  lang), callback_data="main_menu")])
+    rows.append([InlineKeyboardButton(
+        "🎟️ استخدام كوبون" if lang == "ar" else "🎟️ Use Coupon",
+        callback_data="use_coupon"
+    )])
     rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
 
     await _edit(q, t("deposit_title", lang, bal=bal), InlineKeyboardMarkup(rows))
@@ -613,6 +645,11 @@ async def sms_buy_callback(update, context):
     except Exception:
         price = 0.5
 
+    # خصم تلقائي
+    disc_pct = db.get_user_discount(user.id)
+    if disc_pct > 0:
+        price = round(price * (1 - disc_pct / 100), 4)
+
     if not db.deduct_balance(user.id, price):
         await _answer(q, t("sms_insufficient", lang), True); return
 
@@ -622,31 +659,22 @@ async def sms_buy_callback(update, context):
         await _answer(q, t("sms_sold_out", lang), True); return
 
     order_id = db.create_sms_order(
-        user_tg_id=user.id,
-        sms_num_id=num["id"],
-        phone=num["phone"],
-        country=country,
-        cost=price
+        user_tg_id=user.id, sms_num_id=num["id"],
+        phone=num["phone"], country=country, cost=price
     )
 
     from sms_handler import _build_sms_waiting_msg
     msg = await context.bot.send_message(
-        chat_id=user.id,
-        text=_build_sms_waiting_msg(num["phone"], country),
-        parse_mode="HTML"
+        chat_id=user.id, text=_build_sms_waiting_msg(num["phone"], country), parse_mode="HTML"
     )
     db.set_sms_order_msg_id(order_id, msg.message_id)
 
     if poller:
         poller.start_polling(
-            order_id=order_id,
-            user_tg_id=user.id,
-            chat_id=user.id,
-            msg_id=msg.message_id,
-            phone=num["phone"],
-            country=country,
-            api_url=num["api_url"],
-            cost=price,
-            sms_num_id=num["id"]
+            order_id=order_id, user_tg_id=user.id, chat_id=user.id,
+            msg_id=msg.message_id, phone=num["phone"], country=country,
+            api_url=num["api_url"], cost=price, sms_num_id=num["id"]
         )
-    # الإشعار يتبعت في sms_handler.py لما يوصل الكود فعلاً
+
+    # إشعار المُحيل
+    _apply_referral_earning(db, user.id, price)
