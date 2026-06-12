@@ -11,6 +11,7 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, PreCheckoutQueryHandler, filters
 )
+from telegram.ext import ContextTypes
 from telegram.error import BadRequest, TelegramError
 
 import config
