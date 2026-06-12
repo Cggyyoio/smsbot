@@ -239,17 +239,87 @@ async def adm_num_cc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def adm_upload_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
     context.user_data["adm_state"] = "waiting_sessions"
+    context.user_data.pop("upload_category", None)
+    db = context.bot_data["db"]
+    cats = db.get_categories()
+    rows = []
+    for cat in cats:
+        rows.append([InlineKeyboardButton(
+            "📦 {}".format(cat), callback_data="adm_upload_cat_{}".format(cat)
+        )])
+    rows.append([InlineKeyboardButton("➕ فئة جديدة", callback_data="adm_upload_newcat")])
+    rows.append([InlineKeyboardButton("🌍 رفع عادي (تقسيم حسب الدولة)", callback_data="adm_upload_normal")])
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_numbers")])
     await update.callback_query.edit_message_text(
         "📤 <b>رفع ملفات الأرقام</b>\n\n"
+        "اختر طريقة الرفع:\n\n"
+        "🌍 <b>رفع عادي</b>: كل رقم يُصنَّف حسب دولته تلقائياً\n"
+        "📦 <b>فئة مخصصة</b>: كل الملفات في الـ ZIP توضع تحت فئة واحدة باسمها، بدون تقسيم على الدول",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="HTML"
+    )
+
+
+async def adm_upload_normal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_sessions"
+    context.user_data.pop("upload_category", None)
+    await update.callback_query.edit_message_text(
+        "📤 <b>رفع ملفات الأرقام — تقسيم حسب الدولة</b>\n\n"
         "أرسل:\n"
         "• ملف <code>.session</code> مباشرة\n"
         "• ملف <code>.zip</code> يحتوي على sessions\n"
         "• ZIP داخل ZIP مدعوم ✅\n"
         "• يقرأ 2FA من JSON تلقائياً ✅\n\n"
         "يمكنك إرسال عدة ملفات متتالية. اضغط رجوع عند الانتهاء:",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_numbers")]]),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_upload")]]),
         parse_mode="HTML"
     )
+
+
+async def adm_upload_newcat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_new_category"
+    await update.callback_query.edit_message_text(
+        "➕ <b>فئة جديدة</b>\n\n"
+        "أرسل اسم الفئة (مثال: <code>أرقام مميزة</code> أو <code>VIP</code>):\n\n"
+        "كل الأرقام التي ترفعها لهذه الفئة ستظهر تحت اسمها بدلاً من تقسيمها حسب الدول.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_upload")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_upload_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    cat = update.callback_query.data.replace("adm_upload_cat_", "", 1)
+    context.user_data["adm_state"]    = "waiting_sessions"
+    context.user_data["upload_category"] = cat
+    await update.callback_query.edit_message_text(
+        "📤 <b>رفع ملفات للفئة: 📦 {}</b>\n\n"
+        "أرسل ملف <code>.session</code> أو <code>.zip</code>.\n"
+        "كل الأرقام داخل الملف ستوضع تحت هذه الفئة بدون تقسيم على الدول.\n\n"
+        "يمكنك إرسال عدة ملفات متتالية. اضغط رجوع عند الانتهاء:".format(cat),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_upload")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_new_category_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if context.user_data.get("adm_state") != "waiting_new_category":
+        return False
+    name = (update.message.text or "").strip()
+    if not name:
+        await update.message.reply_text("❌ اسم غير صالح."); return True
+    context.user_data["adm_state"]       = "waiting_sessions"
+    context.user_data["upload_category"] = name
+    await update.message.reply_text(
+        "✅ <b>تم إنشاء الفئة: 📦 {}</b>\n\n"
+        "أرسل ملفات <code>.session</code> أو <code>.zip</code> الآن، "
+        "وستوضع جميعها تحت هذه الفئة.\n\n"
+        "اضغط /admin للرجوع عند الانتهاء.".format(name),
+        parse_mode="HTML"
+    )
+    return True
 
 
 async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -259,13 +329,14 @@ async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     doc = update.message.document
     if not doc:
         return False
-    fname = doc.file_name or ""
+    fname    = doc.file_name or ""
+    category = context.user_data.get("upload_category")  # None = تقسيم عادي حسب الدولة
     file  = await doc.get_file()
     data  = await file.download_as_bytearray()
     added = 0; skipped = 0; twofa_count = 0
 
     if fname.endswith(".session"):
-        r = _process_session(db, bytes(data), fname)
+        r = _process_session(db, bytes(data), fname, category=category)
         added += r["added"]; skipped += r["skipped"]
         twofa_count += int(r.get("twofa", False))
 
@@ -284,7 +355,7 @@ async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                             if folder and sib.startswith(folder + "/") and not sib.endswith(".session"):
                                 try: extra[os.path.basename(sib)] = zf.read(sib)
                                 except Exception: pass
-                        r = _process_session(db, sdata, sname, extra_files=extra)
+                        r = _process_session(db, sdata, sname, extra_files=extra, category=category)
                         added += r["added"]; skipped += r["skipped"]
                         twofa_count += int(r.get("twofa", False))
                     elif n.endswith(".zip"):
@@ -302,7 +373,7 @@ async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                                             if ifolder and isib.startswith(ifolder + "/") and not isib.endswith(".session"):
                                                 try: extra[os.path.basename(isib)] = izf.read(isib)
                                                 except Exception: pass
-                                        r = _process_session(db, sdata, sname, extra_files=extra)
+                                        r = _process_session(db, sdata, sname, extra_files=extra, category=category)
                                         added += r["added"]; skipped += r["skipped"]
                                         twofa_count += int(r.get("twofa", False))
                         except Exception: pass
@@ -310,17 +381,19 @@ async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text("❌ خطأ في ZIP: {}".format(e))
             return True
 
+    cat_line = "📦 الفئة: <b>{}</b>\n".format(category) if category else ""
     await update.message.reply_text(
         "✅ <b>تمت المعالجة</b>\n\n"
+        "{}"
         "➕ أُضيف: <b>{}</b>\n"
         "🔐 منهم 2FA: <b>{}</b>\n"
-        "⏭ موجود مسبقاً: <b>{}</b>".format(added, twofa_count, skipped),
+        "⏭ موجود مسبقاً: <b>{}</b>".format(cat_line, added, twofa_count, skipped),
         parse_mode="HTML"
     )
     return True
 
 
-def _process_session(db, data: bytes, filename: str, extra_files: dict = None) -> dict:
+def _process_session(db, data: bytes, filename: str, extra_files: dict = None, category: str = None) -> dict:
     import sqlite3 as sq, json as _json
     phone        = filename.replace(".session", "").split("/")[-1].split("\\")[-1]
     sessions_dir = "sessions"
@@ -360,7 +433,12 @@ def _process_session(db, data: bytes, filename: str, extra_files: dict = None) -
         fix.close()
     except Exception: pass
 
-    cc, flag, cname = detect_country(phone)
+    if category:
+        # فئة مخصصة — لا يتم تقسيمها حسب الدولة
+        cc, flag, cname = "CAT_{}".format(category), "📦", category
+    else:
+        cc, flag, cname = detect_country(phone)
+
     db.add_number(phone, cc, cname, flag, session_path, twofa=twofa)
     return {"added": 1, "skipped": skipped, "twofa": bool(twofa)}
 
@@ -395,7 +473,10 @@ async def adm_prices_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def adm_setprice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
     cc   = update.callback_query.data.replace("adm_setprice_", "")
-    flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
+    if cc.startswith("CAT_"):
+        flag, cname = "📦", cc[4:]
+    else:
+        flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
     context.user_data["adm_state"]    = "waiting_price"
     context.user_data["adm_price_cc"] = cc
     await update.callback_query.edit_message_text(
@@ -420,7 +501,10 @@ async def adm_zip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         cc      = data.replace("adm_zip_", "")
         nums    = db.get_numbers_by_country(cc)
-        flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
+        if cc.startswith("CAT_"):
+            flag, cname = "📦", cc[4:]
+        else:
+            flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
         label   = "sessions_{}".format(cc)
         caption = "📦 {} {} — {} ملف".format(flag, cname, len(nums))
     if not nums:
@@ -666,7 +750,7 @@ ADMIN_STATES = (
     "waiting_price", "waiting_default_price", "waiting_broadcast",
     "waiting_setting_val", "waiting_user_search",
     "waiting_addbal", "waiting_subbal", "waiting_setbal",
-    "waiting_sms_txt", "waiting_sms_price", "waiting_sms_country_price",
+    "waiting_sms_txt", "waiting_sms_price", "waiting_sms_country_price", "waiting_sms_del_phone", "waiting_new_category",
     "waiting_force_channel",
     "waiting_instructions_ar", "waiting_instructions_en",
     "waiting_link_activation", "waiting_link_main", "waiting_link_support",
@@ -694,7 +778,10 @@ async def adm_price_msg_handler(update: Update, context: ContextTypes.DEFAULT_TY
         except ValueError:
             await update.message.reply_text("❌ أرسل رقم صحيح"); return True
         db.set_price(cc, price)
-        flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
+        if cc.startswith("CAT_"):
+            flag, cname = "📦", cc[4:]
+        else:
+            flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
         context.user_data.pop("adm_state", None)
         await update.message.reply_text("{} {} → <b>${:.4f}</b> ✅".format(flag, cname, price), parse_mode="HTML")
 
@@ -1144,119 +1231,124 @@ async def adm_del_sold_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def adm_sms_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
-    db      = context.bot_data["db"]
-    total   = db.get_sms_total_available()
-    default = db.get_setting("sms_price", "0.5")
-    countries = db.get_sms_countries()
-
-    price_lines = ""
-    if countries:
-        for c in countries:
-            price_lines += "  • {} — ${:.2f} ({} متاح)\n".format(
-                c["country"], float(c.get("price", default)), c["available"])
-    else:
-        price_lines = "  لا توجد أرقام مضافة بعد\n"
-
+    db = context.bot_data["db"]
+    wa_total  = db.get_sms_total_available("whatsapp")
+    tg_total  = db.get_sms_total_available("telegram")
+    default   = db.get_setting("sms_price", "0.5")
     await update.callback_query.edit_message_text(
-        "📱 <b>أرقام SMS</b>\n\n"
-        "📦 إجمالي المتاح: <b>{}</b> رقم\n"
-        "💰 السعر الافتراضي: <b>${}</b>\n\n"
-        "🌍 <b>الدول وأسعارها:</b>\n{}".format(total, default, price_lines),
+        "📱 <b>إدارة أرقام SMS</b>\n\n"
+        "💬 واتساب متاح: <b>{}</b>\n"
+        "✈️ تيليجرام متاح: <b>{}</b>\n"
+        "💰 السعر الافتراضي: <b>${}</b>".format(wa_total, tg_total, default),
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📤 رفع ملف TXT",        callback_data="adm_sms_upload")],
-            [InlineKeyboardButton("💰 السعر الافتراضي",    callback_data="adm_sms_price")],
-            [InlineKeyboardButton("🌍 سعر دولة محددة",     callback_data="adm_sms_country_price")],
-            [InlineKeyboardButton("📋 عرض الدول",          callback_data="adm_sms_list")],
-            [InlineKeyboardButton("🗑 حذف كل الأرقام",    callback_data="adm_sms_clear")],
-            [InlineKeyboardButton("🔙 رجوع",               callback_data="adm_main")],
+            [InlineKeyboardButton("📤 رفع ملف واتساب",      callback_data="adm_sms_upload_wa")],
+            [InlineKeyboardButton("📤 رفع ملف تيليجرام",    callback_data="adm_sms_upload_tg")],
+            [InlineKeyboardButton("💰 السعر الافتراضي",     callback_data="adm_sms_price")],
+            [InlineKeyboardButton("🌍 سعر دولة محددة",      callback_data="adm_sms_country_price")],
+            [InlineKeyboardButton("📋 عرض الأرقام",         callback_data="adm_sms_list")],
+            [InlineKeyboardButton("🗑 حذف أرقام",           callback_data="adm_sms_delete_menu")],
+            [InlineKeyboardButton("🔙 رجوع",                callback_data="adm_main")],
         ]),
         parse_mode="HTML"
     )
 
 
-async def adm_sms_upload_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def adm_sms_upload_wa_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
-    context.user_data["adm_state"] = "waiting_sms_txt"
+    context.user_data["adm_state"]    = "waiting_sms_txt"
+    context.user_data["sms_app_type"] = "whatsapp"
     await update.callback_query.edit_message_text(
-        "📤 <b>رفع ملف أرقام SMS</b>\n\n"
-        "أرسل ملف <code>.txt</code> بالصيغة:\n"
+        "📤 <b>رفع ملف أرقام واتساب</b>\n\n"
+        "أرسل ملف <code>.txt</code>:\n"
         "<code>+13347795283|https://api.example.com?token=xxx</code>\n"
-        "<code>+13673243007----https://smsjs.top/api/sms/record?key=xxx</code>\n\n"
-        "كل سطر: رقم <b>|</b> أو <b>----</b> رابط API\n"
-        "يمكنك إرسال عدة ملفات متتالية.",
+        "<code>+13673243007----https://smsjs.top/api/sms/record?key=xxx</code>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_sms_upload_tg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"]    = "waiting_sms_txt"
+    context.user_data["sms_app_type"] = "telegram"
+    await update.callback_query.edit_message_text(
+        "📤 <b>رفع ملف أرقام تيليجرام SMS</b>\n\n"
+        "أرسل ملف <code>.txt</code>:\n"
+        "<code>+13347795283|https://api.example.com?token=xxx</code>",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")]]),
         parse_mode="HTML"
     )
 
 
 async def adm_sms_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تغيير السعر الافتراضي لكل الدول"""
     if not is_admin(update, context): return
     context.user_data["adm_state"] = "waiting_sms_price"
     current = context.bot_data["db"].get_setting("sms_price", "0.5")
     await update.callback_query.edit_message_text(
         "💰 <b>السعر الافتراضي لأرقام SMS</b>\n\n"
-        "يُطبَّق على الدول التي لم تُحدد لها سعراً خاصاً.\n\n"
         "السعر الحالي: <b>${}</b>\n\n"
-        "أرسل السعر الجديد (مثال: <code>0.5</code>):".format(current),
+        "أرسل السعر الجديد:".format(current),
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")]]),
         parse_mode="HTML"
     )
 
 
 async def adm_sms_country_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعرض قائمة الدول الموجودة لاختيار واحدة وتحديد سعرها"""
     if not is_admin(update, context): return
-    db        = context.bot_data["db"]
-    countries = db.get_sms_countries()
-    if not countries:
-        await update.callback_query.answer("لا توجد دول مضافة بعد", show_alert=True)
-        return
-
+    db = context.bot_data["db"]
+    wa_countries = db.get_sms_countries("whatsapp")
+    tg_countries = db.get_sms_countries("telegram")
+    all_countries = wa_countries + tg_countries
+    if not all_countries:
+        await update.callback_query.answer("لا توجد دول مضافة بعد", show_alert=True); return
     rows = []
-    for c in countries:
+    for c in all_countries:
+        icon = "💬" if c["app_type"] == "whatsapp" else "✈️"
         rows.append([InlineKeyboardButton(
-            "🌍 {} — ${:.2f}".format(c["country"], float(c.get("price", 0.5))),
-            callback_data="adm_sms_setcp_{}".format(c["country"])
+            "{} {} — ${:.2f}".format(icon, c["country"], float(c.get("price", 0.5))),
+            callback_data="adm_sms_setcp_{}_{}".format(c["app_type"], c["country"])
         )])
     rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")])
-
     await update.callback_query.edit_message_text(
-        "🌍 <b>تحديد سعر دولة</b>\n\nاختر الدولة:",
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="HTML"
+        "🌍 <b>تحديد سعر دولة</b>\n\nاختر:", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
     )
 
 
 async def adm_sms_setcp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يطلب من الأدمن السعر الجديد لدولة محددة"""
     if not is_admin(update, context): return
-    country = update.callback_query.data.replace("adm_sms_setcp_", "", 1)
+    data    = update.callback_query.data.replace("adm_sms_setcp_", "", 1)
+    parts   = data.split("_", 1)
+    app_type = parts[0]
+    country  = parts[1] if len(parts) > 1 else ""
     context.user_data["adm_state"]       = "waiting_sms_country_price"
     context.user_data["adm_sms_country"] = country
-    current = context.bot_data["db"].get_sms_price(country)
+    context.user_data["adm_sms_app"]     = app_type
+    current = context.bot_data["db"].get_sms_price(country, app_type)
+    icon = "💬" if app_type == "whatsapp" else "✈️"
     await update.callback_query.edit_message_text(
-        "💰 <b>سعر: {}</b>\n\n"
-        "السعر الحالي: <b>${:.2f}</b>\n\n"
-        "أرسل السعر الجديد (مثال: <code>1.0</code>):".format(country, current),
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_country_price")
-        ]]),
+        "💰 {} <b>{}</b>\nالسعر الحالي: <b>${:.2f}</b>\n\nأرسل السعر الجديد:".format(icon, country, current),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_country_price")]]),
         parse_mode="HTML"
     )
 
 
 async def adm_sms_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
-    db        = context.bot_data["db"]
-    countries = db.get_sms_countries()
-    if not countries:
-        await update.callback_query.answer("لا توجد أرقام متاحة", show_alert=True)
-        return
-    text = "🌍 <b>الدول المتاحة — أرقام SMS</b>\n\n"
-    for c in countries:
-        text += "• <b>{}</b>\n  متاح: <b>{}</b>  |  السعر: <b>${:.2f}</b>\n\n".format(
-            c["country"], c["available"], float(c.get("price", 0.5)))
+    db = context.bot_data["db"]
+    wa = db.get_sms_countries("whatsapp")
+    tg = db.get_sms_countries("telegram")
+    text = "📋 <b>أرقام SMS المتاحة</b>\n\n"
+    if wa:
+        text += "💬 <b>واتساب:</b>\n"
+        for c in wa:
+            text += "  • {} — {} متاح — ${:.2f}\n".format(c["country"], c["available"], float(c.get("price",0.5)))
+        text += "\n"
+    if tg:
+        text += "✈️ <b>تيليجرام:</b>\n"
+        for c in tg:
+            text += "  • {} — {} متاح — ${:.2f}\n".format(c["country"], c["available"], float(c.get("price",0.5)))
+    if not wa and not tg:
+        text += "لا توجد أرقام متاحة."
     await update.callback_query.edit_message_text(
         text.strip(),
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")]]),
@@ -1264,15 +1356,95 @@ async def adm_sms_list_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+async def adm_sms_delete_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    await update.callback_query.edit_message_text(
+        "🗑 <b>حذف أرقام SMS</b>\n\nاختر طريقة الحذف:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑 حذف دولة (واتساب)",   callback_data="adm_sms_del_country_wa")],
+            [InlineKeyboardButton("🗑 حذف دولة (تيليجرام)", callback_data="adm_sms_del_country_tg")],
+            [InlineKeyboardButton("🗑 حذف رقم واحد",        callback_data="adm_sms_del_single")],
+            [InlineKeyboardButton("🗑 حذف كل واتساب",      callback_data="adm_sms_clear_wa")],
+            [InlineKeyboardButton("🗑 حذف كل تيليجرام",    callback_data="adm_sms_clear_tg")],
+            [InlineKeyboardButton("🗑 حذف الكل",            callback_data="adm_sms_clear_all")],
+            [InlineKeyboardButton("🔙 رجوع",                callback_data="adm_sms")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_sms_del_country_wa_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db = context.bot_data["db"]
+    countries = db.get_sms_countries("whatsapp")
+    if not countries:
+        await update.callback_query.answer("لا توجد دول واتساب", show_alert=True); return
+    rows = [[InlineKeyboardButton("🗑 {}".format(c["country"]),
+             callback_data="adm_sms_delcountry_wa_{}".format(c["country"]))] for c in countries]
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_delete_menu")])
+    await update.callback_query.edit_message_text(
+        "اختر الدولة للحذف (واتساب):", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
+    )
+
+
+async def adm_sms_del_country_tg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db = context.bot_data["db"]
+    countries = db.get_sms_countries("telegram")
+    if not countries:
+        await update.callback_query.answer("لا توجد دول تيليجرام", show_alert=True); return
+    rows = [[InlineKeyboardButton("🗑 {}".format(c["country"]),
+             callback_data="adm_sms_delcountry_tg_{}".format(c["country"]))] for c in countries]
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_delete_menu")])
+    await update.callback_query.edit_message_text(
+        "اختر الدولة للحذف (تيليجرام):", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
+    )
+
+
+async def adm_sms_delcountry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    data = update.callback_query.data.replace("adm_sms_delcountry_", "")
+    parts = data.split("_", 1)
+    app_type = parts[0]
+    country  = parts[1] if len(parts) > 1 else ""
+    context.bot_data["db"].delete_sms_by_country(country, app_type)
+    await update.callback_query.answer("✅ تم حذف {}".format(country), show_alert=True)
+    update.callback_query.data = "adm_sms_delete_menu"
+    await adm_sms_delete_menu_callback(update, context)
+
+
+async def adm_sms_del_single_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_sms_del_phone"
+    await update.callback_query.edit_message_text(
+        "📞 أرسل رقم الهاتف للحذف:\n<code>+1234567890</code>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_delete_menu")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_sms_clear_wa_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.bot_data["db"].delete_all_sms_numbers("whatsapp")
+    await update.callback_query.answer("✅ تم حذف كل أرقام واتساب", show_alert=True)
+    await adm_sms_callback(update, context)
+
+
+async def adm_sms_clear_tg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.bot_data["db"].delete_all_sms_numbers("telegram")
+    await update.callback_query.answer("✅ تم حذف كل أرقام تيليجرام", show_alert=True)
+    await adm_sms_callback(update, context)
+
+
 async def adm_sms_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
     context.bot_data["db"].delete_all_sms_numbers()
-    await update.callback_query.answer("🗑 تم حذف كل أرقام SMS", show_alert=True)
+    await update.callback_query.answer("✅ تم حذف كل أرقام SMS", show_alert=True)
     await adm_sms_callback(update, context)
 
 
 async def adm_sms_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """يعالج ملفات TXT لأرقام SMS"""
     if context.user_data.get("adm_state") != "waiting_sms_txt":
         return False
     doc = update.message.document
@@ -1282,163 +1454,59 @@ async def adm_sms_file_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not fname.endswith(".txt"):
         await update.message.reply_text("❌ يجب أن يكون الملف بصيغة .txt")
         return True
-
+    app_type = context.user_data.pop("sms_app_type", "whatsapp")
     file    = await doc.get_file()
     data    = await file.download_as_bytearray()
     content = bytes(data).decode("utf-8", errors="ignore")
-
     from sms_handler import parse_sms_txt
-    numbers = parse_sms_txt(content)
+    numbers = parse_sms_txt(content, app_type)
     if not numbers:
         await update.message.reply_text("❌ لم يُعثر على أرقام صالحة في الملف.")
         return True
-
     added = context.bot_data["db"].add_sms_numbers_bulk(numbers)
+    icon  = "💬" if app_type == "whatsapp" else "✈️"
     await update.message.reply_text(
-        "✅ <b>تمت المعالجة</b>\n\n"
-        "📋 إجمالي الملف: <b>{}</b> سطر\n"
-        "➕ أُضيف: <b>{}</b> رقم".format(len(numbers), added),
+        "✅ {} <b>تمت المعالجة</b>\n\n📋 الملف: <b>{}</b> سطر\n➕ أُضيف: <b>{}</b> رقم".format(
+            icon, len(numbers), added),
         parse_mode="HTML"
     )
     return True
 
 
 async def adm_sms_price_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """يعالج أسعار SMS المُرسَلة من الأدمن (افتراضي أو دولة محددة)"""
     state = context.user_data.get("adm_state")
+    if state == "waiting_sms_del_phone":
+        phone = (update.message.text or "").strip()
+        context.user_data.pop("adm_state", None)
+        context.bot_data["db"].delete_sms_by_phone(phone)
+        await update.message.reply_text("✅ تم حذف <code>{}</code>".format(phone), parse_mode="HTML")
+        return True
     if state not in ("waiting_sms_price", "waiting_sms_country_price"):
         return False
-
     text = (update.message.text or "").strip()
     try:
         price = float(text.replace(",", "."))
-        if price <= 0:
-            raise ValueError
+        if price <= 0: raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ أرسل رقم صحيح موجب")
-        return True
-
+        await update.message.reply_text("❌ أرسل رقم صحيح موجب"); return True
     db = context.bot_data["db"]
-
     if state == "waiting_sms_price":
         db.set_setting("sms_price", str(price))
         context.user_data.pop("adm_state", None)
-        await update.message.reply_text(
-            "✅ السعر الافتراضي لأرقام SMS = <b>${:.4f}</b>".format(price),
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("✅ السعر الافتراضي = <b>${:.4f}</b>".format(price), parse_mode="HTML")
     else:
-        country = context.user_data.pop("adm_sms_country", "")
+        country  = context.user_data.pop("adm_sms_country", "")
+        app_type = context.user_data.pop("adm_sms_app", "whatsapp")
         context.user_data.pop("adm_state", None)
         if country:
-            db.set_sms_country_price(country, price)
+            db.set_sms_country_price(country, price, app_type)
+            icon = "💬" if app_type == "whatsapp" else "✈️"
             await update.message.reply_text(
-                "✅ سعر <b>{}</b> = <b>${:.4f}</b>".format(country, price),
-                parse_mode="HTML"
+                "✅ {} <b>{}</b> = <b>${:.4f}</b>".format(icon, country, price), parse_mode="HTML"
             )
         else:
             await update.message.reply_text("❌ خطأ: لم يتم تحديد الدولة")
     return True
-
-
-# ══════════════════════════════════════════════════════════
-#  الاشتراك الإجباري — لوحة الأدمن
-# ══════════════════════════════════════════════════════════
-
-def _force_sub_text(channels: list) -> str:
-    if not channels:
-        return "📌 <b>الاشتراك الإجباري</b>\n\n⭕ لا توجد قنوات إجبارية حالياً."
-    lines = "📌 <b>الاشتراك الإجباري</b>\n\n<b>القنوات المضافة:</b>\n\n"
-    for i, ch in enumerate(channels, 1):
-        name = ch.get("name", "بدون اسم")
-        link = ch.get("link", "—")
-        cid  = ch.get("id", "—")
-        lines += "{}. <b>{}</b>\n   🆔 <code>{}</code>\n   🔗 {}\n\n".format(i, name, cid, link)
-    return lines.strip()
-
-
-async def adm_cfg_force_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update, context): return
-    db       = context.bot_data["db"]
-    channels = db.get_force_channels()
-    rows = [
-        [InlineKeyboardButton("➕ إضافة قناة / جروب",   callback_data="adm_force_add")],
-        [InlineKeyboardButton("🗑 حذف قناة",             callback_data="adm_force_del")],
-        [InlineKeyboardButton("❌ مسح الكل",             callback_data="adm_force_clear")],
-        [InlineKeyboardButton("🔙 رجوع",                 callback_data="adm_settings")],
-    ]
-    await update.callback_query.edit_message_text(
-        _force_sub_text(channels),
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="HTML"
-    )
-
-
-async def adm_force_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update, context): return
-    context.user_data["adm_state"] = "waiting_force_channel"
-    await update.callback_query.edit_message_text(
-        "📌 <b>إضافة قناة اشتراك إجباري</b>\n\n"
-        "أرسل بيانات القناة بالصيغة:\n\n"
-        "<code>CHANNEL_ID | اسم القناة | رابط القناة</code>\n\n"
-        "<b>مثال:</b>\n"
-        "<code>-1001234567890 | قناة الدعم | https://t.me/mychannel</code>\n\n"
-        "📝 <b>ملاحظات:</b>\n"
-        "• CHANNEL_ID يبدأ بـ <code>-100</code>\n"
-        "• اجعل البوت أدمن في القناة أولاً\n"
-        "• الرابط اختياري (اتركه فارغاً لو ما فيش)\n\n"
-        "<b>صيغة بدون رابط:</b>\n"
-        "<code>-1001234567890 | اسم القناة</code>",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_force_sub")
-        ]]),
-        parse_mode="HTML"
-    )
-
-
-async def adm_force_del_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update, context): return
-    db       = context.bot_data["db"]
-    channels = db.get_force_channels()
-    if not channels:
-        await update.callback_query.answer("لا توجد قنوات للحذف", show_alert=True)
-        return
-    rows = []
-    for i, ch in enumerate(channels):
-        name = ch.get("name", "قناة {}".format(i+1))
-        rows.append([InlineKeyboardButton(
-            "🗑 {}".format(name),
-            callback_data="adm_force_delone_{}".format(i)
-        )])
-    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_force_sub")])
-    await update.callback_query.edit_message_text(
-        "🗑 <b>اختر القناة للحذف:</b>",
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="HTML"
-    )
-
-
-async def adm_force_delone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update, context): return
-    idx = int(update.callback_query.data.replace("adm_force_delone_", ""))
-    db       = context.bot_data["db"]
-    channels = db.get_force_channels()
-    if 0 <= idx < len(channels):
-        removed = channels.pop(idx)
-        db.set_force_channels(channels)
-        await update.callback_query.answer(
-            "🗑 تم حذف: {}".format(removed.get("name", "")), show_alert=True
-        )
-    update.callback_query.data = "adm_cfg_force_sub"
-    await adm_cfg_force_sub_callback(update, context)
-
-
-async def adm_force_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update, context): return
-    context.bot_data["db"].set_force_channels([])
-    await update.callback_query.answer("✅ تم مسح كل القنوات الإجبارية", show_alert=True)
-    update.callback_query.data = "adm_cfg_force_sub"
-    await adm_cfg_force_sub_callback(update, context)
 
 
 async def adm_force_channel_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
