@@ -618,17 +618,6 @@ class Database:
             ).fetchone()
             return r[0] if r else 0
 
-    def get_sms_total_available(self) -> int:
-        with self._conn() as conn:
-            r = conn.execute(
-                "SELECT COUNT(*) FROM sms_numbers WHERE status='available'"
-            ).fetchone()
-            return r[0] if r else 0
-
-    def delete_all_sms_numbers(self):
-        with self._conn() as conn:
-            conn.execute("DELETE FROM sms_numbers")
-
     # ══ SMS Orders ════════════════════════════════════════
     def create_sms_order(self, user_tg_id: int, sms_num_id: int,
                          phone: str, country: str, cost: float) -> int:
