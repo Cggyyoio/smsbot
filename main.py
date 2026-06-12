@@ -54,6 +54,7 @@ async def message_router(update: Update, context):
         adm_file_handler, adm_price_msg_handler,
         adm_sms_file_handler, adm_sms_price_msg_handler,
         adm_force_channel_msg_handler,
+        adm_new_category_msg_handler,
         adm_instructions_msg_handler,
         adm_links_msg_handler,
         adm_coupon_create_msg_handler,
@@ -113,7 +114,11 @@ async def message_router(update: Update, context):
     if await adm_sms_price_msg_handler(update, context):
         return
 
-    # ⑧ قناة اشتراك إجباري
+    # ⑧ فئة رفع جديدة
+    if await adm_new_category_msg_handler(update, context):
+        return
+
+    # ⑨ قناة اشتراك إجباري
     if await adm_force_channel_msg_handler(update, context):
         return
 
@@ -204,7 +209,7 @@ def register_handlers(app: Application):
         confirm_buy_callback, get_otp_callback,
         my_orders_callback, deposit_callback,
         charge_usdt_menu_callback,
-        sms_countries_callback, sms_buy_callback,
+        sms_countries_callback, sms_buy_callback, sms_app_callback,
         check_sub_callback,
         choose_language_callback, set_lang_callback,
         instructions_callback,
@@ -213,7 +218,9 @@ def register_handlers(app: Application):
     # ── Admin ─────────────────────────────────────────────
     from handlers.admin.panel import (
         admin_callback, adm_numbers_callback, adm_num_cc_callback,
-        adm_upload_callback, adm_prices_callback, adm_setprice_callback,
+        adm_upload_callback, adm_upload_normal_callback, adm_upload_newcat_callback,
+        adm_upload_cat_callback, adm_new_category_msg_handler,
+        adm_prices_callback, adm_setprice_callback,
         adm_orders_callback, adm_deposits_callback,
         adm_dep_ok_callback, adm_dep_no_callback,
         adm_broadcast_callback, adm_settings_callback, adm_set_key_callback,
@@ -228,9 +235,13 @@ def register_handlers(app: Application):
         adm_stats_callback,
         adm_users_callback, adm_ban_callback, adm_unban_callback,
         adm_addbal_callback, adm_subbal_callback, adm_setbal_callback,
-        adm_sms_callback, adm_sms_upload_callback, adm_sms_price_callback,
-        adm_sms_list_callback, adm_sms_clear_callback,
+        adm_sms_callback, adm_sms_upload_wa_callback, adm_sms_upload_tg_callback,
+        adm_sms_price_callback, adm_sms_list_callback,
+        adm_sms_clear_callback, adm_sms_clear_wa_callback, adm_sms_clear_tg_callback,
         adm_sms_country_price_callback, adm_sms_setcp_callback,
+        adm_sms_delete_menu_callback, adm_sms_del_country_wa_callback,
+        adm_sms_del_country_tg_callback, adm_sms_delcountry_callback,
+        adm_sms_del_single_callback,
         adm_cfg_force_sub_callback, adm_force_add_callback,
         adm_force_del_callback, adm_force_delone_callback, adm_force_clear_callback,
         adm_cfg_instructions_callback,
@@ -268,15 +279,17 @@ def register_handlers(app: Application):
 
     # ━━━━━━━━━━━━━━━━━━━━━━ SMS ━━━━━━━━━━━━━━━━━━━━━━━━━━━
     app.add_handler(CallbackQueryHandler(sms_countries_callback, pattern="^sms_countries$"))
+    app.add_handler(CallbackQueryHandler(sms_app_callback,       pattern=r"^sms_app_(whatsapp|telegram)$"))
     app.add_handler(CallbackQueryHandler(sms_buy_callback,       pattern=r"^sms_buy_.+$"))
 
     # ━━━━━━━━━━━━━━━━━━━━━━ Stars ━━━━━━━━━━━━━━━━━━━━━━━━━
     app.add_handler(CallbackQueryHandler(charge_stars_callback, pattern="^charge_stars$"))
     app.add_handler(CallbackQueryHandler(stars_preset_callback, pattern=r"^stars_buy_\d+(\.\d+)?$"))
     app.add_handler(CallbackQueryHandler(stars_custom_callback, pattern="^stars_custom$"))
-    app.add_handler(PreCheckoutQueryHandler(
-        lambda u, c: u.pre_checkout_query.answer(ok=True)
-    ))
+    async def _precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.pre_checkout_query.answer(ok=True)
+
+    app.add_handler(PreCheckoutQueryHandler(_precheckout_handler))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_stars))
 
     # ━━━━━━━━━━━━━━━━━━━━━━ Binance ━━━━━━━━━━━━━━━━━━━━━━━
@@ -357,7 +370,10 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_stats_callback,     pattern="^adm_stats$"))
     app.add_handler(CallbackQueryHandler(adm_numbers_callback,   pattern="^adm_numbers$"))
     app.add_handler(CallbackQueryHandler(adm_num_cc_callback,    pattern=r"^adm_num_cc_.+$"))
-    app.add_handler(CallbackQueryHandler(adm_upload_callback,    pattern="^adm_upload$"))
+    app.add_handler(CallbackQueryHandler(adm_upload_callback,        pattern="^adm_upload$"))
+    app.add_handler(CallbackQueryHandler(adm_upload_normal_callback, pattern="^adm_upload_normal$"))
+    app.add_handler(CallbackQueryHandler(adm_upload_newcat_callback, pattern="^adm_upload_newcat$"))
+    app.add_handler(CallbackQueryHandler(adm_upload_cat_callback,    pattern=r"^adm_upload_cat_.+$"))
     app.add_handler(CallbackQueryHandler(adm_prices_callback,    pattern="^adm_prices$"))
     app.add_handler(CallbackQueryHandler(adm_setprice_callback,  pattern=r"^adm_setprice_.+$"))
     app.add_handler(CallbackQueryHandler(adm_orders_callback,    pattern="^adm_orders$"))
@@ -397,12 +413,20 @@ def register_handlers(app: Application):
 
     # Admin — SMS
     app.add_handler(CallbackQueryHandler(adm_sms_callback,              pattern="^adm_sms$"))
-    app.add_handler(CallbackQueryHandler(adm_sms_upload_callback,       pattern="^adm_sms_upload$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_upload_wa_callback,    pattern="^adm_sms_upload_wa$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_upload_tg_callback,    pattern="^adm_sms_upload_tg$"))
     app.add_handler(CallbackQueryHandler(adm_sms_price_callback,        pattern="^adm_sms_price$"))
     app.add_handler(CallbackQueryHandler(adm_sms_country_price_callback,pattern="^adm_sms_country_price$"))
     app.add_handler(CallbackQueryHandler(adm_sms_setcp_callback,        pattern=r"^adm_sms_setcp_.+$"))
     app.add_handler(CallbackQueryHandler(adm_sms_list_callback,         pattern="^adm_sms_list$"))
-    app.add_handler(CallbackQueryHandler(adm_sms_clear_callback,        pattern="^adm_sms_clear$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_delete_menu_callback,  pattern="^adm_sms_delete_menu$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_del_country_wa_callback,pattern="^adm_sms_del_country_wa$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_del_country_tg_callback,pattern="^adm_sms_del_country_tg$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_delcountry_callback,   pattern=r"^adm_sms_delcountry_.+$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_del_single_callback,   pattern="^adm_sms_del_single$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_clear_wa_callback,     pattern="^adm_sms_clear_wa$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_clear_tg_callback,     pattern="^adm_sms_clear_tg$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_clear_callback,        pattern="^adm_sms_clear_all$"))
 
     # Admin — اشتراك إجباري
     app.add_handler(CallbackQueryHandler(adm_cfg_force_sub_callback, pattern="^adm_cfg_force_sub$"))

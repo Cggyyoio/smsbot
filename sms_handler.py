@@ -302,12 +302,12 @@ class SmsPoller:
 #  parse_sms_txt — يدعم | و ----
 # ──────────────────────────────────────────────────────────
 
-def parse_sms_txt(content: str) -> list[dict]:
+def parse_sms_txt(content: str, app_type: str = "whatsapp") -> list[dict]:
     """
     الصيغ المدعومة:
       +13347795283|https://feizi.shop?token=xxx
       +13673243007----https://smsjs.top/api/sms/record?key=xxx
-    يرجع قائمة {phone, api_url, country}
+    يرجع قائمة {phone, api_url, country, app_type}
     """
     from country_codes import detect_country
     SEP_RE = re.compile(r'\||-{2,}|\t')
@@ -327,8 +327,9 @@ def parse_sms_txt(content: str) -> list[dict]:
             phone = "+" + phone
         cc, flag, cname = detect_country(phone)
         numbers.append({
-            "phone":   phone,
-            "api_url": api_url,
-            "country": "{} {}".format(flag, cname)
+            "phone":    phone,
+            "api_url":  api_url,
+            "country":  "{} {}".format(flag, cname),
+            "app_type": app_type,
         })
     return numbers

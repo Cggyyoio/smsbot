@@ -91,6 +91,7 @@ class Database:
                     phone      TEXT UNIQUE NOT NULL,
                     api_url    TEXT NOT NULL,
                     country    TEXT NOT NULL,
+                    app_type   TEXT NOT NULL DEFAULT 'whatsapp',
                     status     TEXT DEFAULT 'available',
                     locked_by  INTEGER,
                     locked_at  TIMESTAMP,
@@ -110,8 +111,10 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS sms_country_prices (
-                    country    TEXT PRIMARY KEY,
-                    price      REAL NOT NULL DEFAULT 0.5
+                    country    TEXT NOT NULL,
+                    app_type   TEXT NOT NULL DEFAULT 'whatsapp',
+                    price      REAL NOT NULL DEFAULT 0.5,
+                    PRIMARY KEY (country, app_type)
                 );
                 CREATE TABLE IF NOT EXISTS coupons (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,6 +159,8 @@ class Database:
             sms_cols = [r[1] for r in conn.execute("PRAGMA table_info(sms_numbers)").fetchall()]
             if "fail_count" not in sms_cols and sms_cols:
                 conn.execute("ALTER TABLE sms_numbers ADD COLUMN fail_count INTEGER DEFAULT 0")
+            if "app_type" not in sms_cols and sms_cols:
+                conn.execute("ALTER TABLE sms_numbers ADD COLUMN app_type TEXT DEFAULT 'whatsapp'")
         logger.info("[DB] جاهزة ✅")
 
     # ══ Settings ══════════════════════════════════════════
@@ -479,42 +484,44 @@ class Database:
 
     # ══ SMS Numbers ═══════════════════════════════════════
     def add_sms_numbers_bulk(self, numbers: list) -> int:
-        """numbers = [{"phone": "+1234", "api_url": "...", "country": "US"}, ...]"""
+        """numbers = [{"phone": "+1234", "api_url": "...", "country": "US", "app_type": "whatsapp"}, ...]"""
         added = 0
         with self._conn() as conn:
             for n in numbers:
                 try:
                     conn.execute(
-                        "INSERT OR IGNORE INTO sms_numbers(phone,api_url,country) VALUES(?,?,?)",
-                        (n["phone"], n["api_url"], n["country"])
+                        "INSERT OR IGNORE INTO sms_numbers(phone,api_url,country,app_type) VALUES(?,?,?,?)",
+                        (n["phone"], n["api_url"], n["country"], n.get("app_type", "whatsapp"))
                     )
                     added += 1
                 except Exception:
                     pass
         return added
 
-    def get_sms_countries(self) -> list:
+    def get_sms_countries(self, app_type: str = None) -> list:
         with self._conn() as conn:
-            rows = conn.execute("""
-                SELECT n.country,
+            where = "AND n.app_type=?" if app_type else ""
+            args  = (app_type,) if app_type else ()
+            rows  = conn.execute("""
+                SELECT n.country, n.app_type,
                        COUNT(*) as total,
                        SUM(CASE WHEN n.status='available' THEN 1 ELSE 0 END) as available,
                        COALESCE(p.price,
                            (SELECT CAST(value AS REAL) FROM settings WHERE key='sms_price'),
                            0.5) as price
                 FROM sms_numbers n
-                LEFT JOIN sms_country_prices p ON p.country = n.country
-                GROUP BY n.country HAVING available > 0
+                LEFT JOIN sms_country_prices p ON p.country = n.country AND p.app_type = n.app_type
+                WHERE 1=1 {}
+                GROUP BY n.country, n.app_type HAVING available > 0
                 ORDER BY n.country
-            """).fetchall()
+            """.format(where), args).fetchall()
             return [dict(r) for r in rows]
 
-    def lock_sms_number(self, country: str, user_tg_id: int) -> dict | None:
-        """يحجز أول رقم متاح ويرجعه أو None"""
+    def lock_sms_number(self, country: str, user_tg_id: int, app_type: str = "whatsapp") -> dict | None:
         with self._conn() as conn:
             r = conn.execute(
-                "SELECT * FROM sms_numbers WHERE country=? AND status='available' LIMIT 1",
-                (country,)
+                "SELECT * FROM sms_numbers WHERE country=? AND app_type=? AND status='available' LIMIT 1",
+                (country, app_type)
             ).fetchone()
             if not r:
                 return None
@@ -523,6 +530,34 @@ class Database:
                 (user_tg_id, r["id"])
             )
             return dict(r)
+
+    def get_sms_total_available(self, app_type: str = None) -> int:
+        with self._conn() as conn:
+            if app_type:
+                r = conn.execute(
+                    "SELECT COUNT(*) FROM sms_numbers WHERE status='available' AND app_type=?", (app_type,)
+                ).fetchone()
+            else:
+                r = conn.execute("SELECT COUNT(*) FROM sms_numbers WHERE status='available'").fetchone()
+            return r[0] if r else 0
+
+    def delete_sms_by_country(self, country: str, app_type: str = None):
+        with self._conn() as conn:
+            if app_type:
+                conn.execute("DELETE FROM sms_numbers WHERE country=? AND app_type=?", (country, app_type))
+            else:
+                conn.execute("DELETE FROM sms_numbers WHERE country=?", (country,))
+
+    def delete_sms_by_phone(self, phone: str):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM sms_numbers WHERE phone=?", (phone,))
+
+    def delete_all_sms_numbers(self, app_type: str = None):
+        with self._conn() as conn:
+            if app_type:
+                conn.execute("DELETE FROM sms_numbers WHERE app_type=?", (app_type,))
+            else:
+                conn.execute("DELETE FROM sms_numbers")
 
     def release_sms_number(self, sms_num_id: int):
         with self._conn() as conn:
@@ -549,32 +584,30 @@ class Database:
             conn.execute("DELETE FROM sms_numbers WHERE id=?", (sms_num_id,))
 
     # ══ SMS Country Prices ════════════════════════════════
-    def get_sms_price(self, country: str) -> float:
-        """يرجع سعر الدولة أو السعر الافتراضي"""
+    def get_sms_price(self, country: str, app_type: str = "whatsapp") -> float:
         with self._conn() as conn:
             r = conn.execute(
-                "SELECT price FROM sms_country_prices WHERE country=?", (country,)
+                "SELECT price FROM sms_country_prices WHERE country=? AND app_type=?",
+                (country, app_type)
             ).fetchone()
             if r:
                 return r[0]
-            r2 = conn.execute(
-                "SELECT value FROM settings WHERE key='sms_price'"
-            ).fetchone()
+            r2 = conn.execute("SELECT value FROM settings WHERE key='sms_price'").fetchone()
             try:
                 return float(r2[0]) if r2 else 0.5
             except Exception:
                 return 0.5
 
-    def set_sms_country_price(self, country: str, price: float):
+    def set_sms_country_price(self, country: str, price: float, app_type: str = "whatsapp"):
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO sms_country_prices(country, price) VALUES(?,?)",
-                (country, price)
+                "INSERT OR REPLACE INTO sms_country_prices(country, app_type, price) VALUES(?,?,?)",
+                (country, app_type, price)
             )
 
     def get_all_sms_country_prices(self) -> dict:
         with self._conn() as conn:
-            return {r["country"]: r["price"] for r in
+            return {"{}_{}".format(r["country"], r["app_type"]): r["price"] for r in
                     conn.execute("SELECT * FROM sms_country_prices").fetchall()}
 
     def count_sms_available(self, country: str) -> int:
@@ -836,3 +869,12 @@ class Database:
         with self._conn() as conn:
             r = conn.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()
             return float(r[0]) if r else 0.0
+
+    # ══ Custom Categories (أرقام بدون تقسيم على الدول) ═══
+    def get_categories(self) -> list:
+        """يرجع قائمة أسماء الفئات المخصصة الموجودة فعلياً"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT country_name FROM numbers WHERE country_code LIKE 'CAT_%' ORDER BY country_name"
+            ).fetchall()
+            return [r[0] for r in rows]
