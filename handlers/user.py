@@ -599,6 +599,7 @@ async def charge_usdt_menu_callback(update: Update, context: ContextTypes.DEFAUL
 # ──────────────────────────────────────────────────────────
 
 async def sms_countries_callback(update, context):
+    """شاشة اختيار التطبيق: واتساب أو تيليجرام"""
     q    = update.callback_query
     db   = context.bot_data["db"]
     user = update.effective_user
@@ -609,11 +610,55 @@ async def sms_countries_callback(update, context):
     if db.is_banned(user.id):
         await _answer(q, t("banned_short", lang), True); return
 
-    countries = db.get_sms_countries()
-    if not countries:
-        await _edit(q, t("sms_no_numbers", lang), _back_kb(lang=lang)); return
+    wa_avail = db.get_sms_total_available("whatsapp")
+    tg_avail = db.get_sms_total_available("telegram")
 
     bal  = db.get_balance(user.id)
+    text = (
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📱 <b>أرقام SMS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💳 رصيدك: <b>${:.3f}</b>\n\n"
+        "اختر التطبيق:"
+    ).format(bal)
+
+    rows = [
+        [InlineKeyboardButton(
+            "💬 واتساب ({} متاح)".format(wa_avail) if lang == "ar" else "💬 WhatsApp ({} available)".format(wa_avail),
+            callback_data="sms_app_whatsapp"
+        )],
+        [InlineKeyboardButton(
+            "✈️ تيليجرام ({} متاح)".format(tg_avail) if lang == "ar" else "✈️ Telegram ({} available)".format(tg_avail),
+            callback_data="sms_app_telegram"
+        )],
+        [InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")],
+    ]
+    await _edit(q, text, InlineKeyboardMarkup(rows))
+
+
+async def sms_app_callback(update, context):
+    """يعرض الدول المتاحة للتطبيق المختار"""
+    q        = update.callback_query
+    db       = context.bot_data["db"]
+    user     = update.effective_user
+    lang     = _lang(db, user.id)
+    app_type = q.data.replace("sms_app_", "")  # whatsapp أو telegram
+    await _answer(q)
+
+    if db.is_banned(user.id):
+        await _answer(q, t("banned_short", lang), True); return
+
+    countries = db.get_sms_countries(app_type)
+    if not countries:
+        icon = "💬" if app_type == "whatsapp" else "✈️"
+        await _edit(q,
+            "{} <b>لا توجد أرقام {} متاحة حالياً</b>".format(
+                icon, "واتساب" if app_type == "whatsapp" else "تيليجرام"),
+            InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_back", lang), callback_data="sms_countries")]])
+        ); return
+
+    bal  = db.get_balance(user.id)
+    icon = "💬" if app_type == "whatsapp" else "✈️"
     rows = []
     for i in range(0, len(countries), 2):
         row = []
@@ -622,11 +667,21 @@ async def sms_countries_callback(update, context):
             can   = "✅" if bal >= price else "💳"
             row.append(InlineKeyboardButton(
                 "{} {} — ${:.2f} ({})".format(can, c["country"], price, c["available"]),
-                callback_data="sms_buy_{}".format(c["country"])
+                callback_data="sms_buy_{}_{}".format(app_type, c["country"])
             ))
         rows.append(row)
-    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
-    await _edit(q, t("sms_title", lang, bal=bal), InlineKeyboardMarkup(rows))
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="sms_countries")])
+
+    await _edit(q,
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "{} <b>أرقام {}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💳 رصيدك: <b>${:.3f}</b>\n\n"
+        "✅ = يمكنك الشراء  |  💳 = رصيد غير كافٍ\n\n"
+        "🌍 اختر الدولة:".format(
+            icon, "واتساب" if app_type == "whatsapp" else "تيليجرام", bal),
+        InlineKeyboardMarkup(rows)
+    )
 
 async def sms_buy_callback(update, context):
     q       = update.callback_query
@@ -634,18 +689,20 @@ async def sms_buy_callback(update, context):
     poller  = context.bot_data.get("sms_poller")
     user    = update.effective_user
     lang    = _lang(db, user.id)
-    country = q.data.replace("sms_buy_", "", 1)
+    raw      = q.data.replace("sms_buy_", "", 1)
+    parts    = raw.split("_", 1)
+    app_type = parts[0]
+    country  = parts[1] if len(parts) > 1 else ""
     await _answer(q)
 
     if db.is_banned(user.id):
         await _answer(q, t("banned_short", lang), True); return
 
     try:
-        price = db.get_sms_price(country)
+        price = db.get_sms_price(country, app_type)
     except Exception:
         price = 0.5
 
-    # خصم تلقائي
     disc_pct = db.get_user_discount(user.id)
     if disc_pct > 0:
         price = round(price * (1 - disc_pct / 100), 4)
@@ -653,7 +710,7 @@ async def sms_buy_callback(update, context):
     if not db.deduct_balance(user.id, price):
         await _answer(q, t("sms_insufficient", lang), True); return
 
-    num = db.lock_sms_number(country, user.id)
+    num = db.lock_sms_number(country, user.id, app_type)
     if not num:
         db.add_balance(user.id, price)
         await _answer(q, t("sms_sold_out", lang), True); return
@@ -664,17 +721,20 @@ async def sms_buy_callback(update, context):
     )
 
     from sms_handler import _build_sms_waiting_msg
+    icon = "💬" if app_type == "whatsapp" else "✈️"
+    display_country = "{} {}".format(icon, country)
     msg = await context.bot.send_message(
-        chat_id=user.id, text=_build_sms_waiting_msg(num["phone"], country), parse_mode="HTML"
+        chat_id=user.id,
+        text=_build_sms_waiting_msg(num["phone"], display_country),
+        parse_mode="HTML"
     )
     db.set_sms_order_msg_id(order_id, msg.message_id)
 
     if poller:
         poller.start_polling(
             order_id=order_id, user_tg_id=user.id, chat_id=user.id,
-            msg_id=msg.message_id, phone=num["phone"], country=country,
+            msg_id=msg.message_id, phone=num["phone"], country=display_country,
             api_url=num["api_url"], cost=price, sms_num_id=num["id"]
         )
 
-    # إشعار المُحيل
     _apply_referral_earning(db, user.id, price)
