@@ -612,6 +612,8 @@ async def sms_countries_callback(update, context):
 
     wa_avail = db.get_sms_total_available("whatsapp")
     tg_avail = db.get_sms_total_available("telegram")
+    wa_label = db.get_setting("sms_wa_label", "واتساب")
+    tg_label = db.get_setting("sms_tg_label", "تيليجرام")
 
     bal  = db.get_balance(user.id)
     text = (
@@ -624,11 +626,11 @@ async def sms_countries_callback(update, context):
 
     rows = [
         [InlineKeyboardButton(
-            "💬 واتساب ({} متاح)".format(wa_avail) if lang == "ar" else "💬 WhatsApp ({} available)".format(wa_avail),
+            "💬 {} ({} متاح)".format(wa_label, wa_avail) if lang == "ar" else "💬 {} ({} available)".format(wa_label, wa_avail),
             callback_data="sms_app_whatsapp"
         )],
         [InlineKeyboardButton(
-            "✈️ تيليجرام ({} متاح)".format(tg_avail) if lang == "ar" else "✈️ Telegram ({} available)".format(tg_avail),
+            "✈️ {} ({} متاح)".format(tg_label, tg_avail) if lang == "ar" else "✈️ {} ({} available)".format(tg_label, tg_avail),
             callback_data="sms_app_telegram"
         )],
         [InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")],
@@ -649,11 +651,13 @@ async def sms_app_callback(update, context):
         await _answer(q, t("banned_short", lang), True); return
 
     countries = db.get_sms_countries(app_type)
+    wa_label  = db.get_setting("sms_wa_label", "واتساب")
+    tg_label  = db.get_setting("sms_tg_label", "تيليجرام")
+    app_name  = wa_label if app_type == "whatsapp" else tg_label
     if not countries:
         icon = "💬" if app_type == "whatsapp" else "✈️"
         await _edit(q,
-            "{} <b>لا توجد أرقام {} متاحة حالياً</b>".format(
-                icon, "واتساب" if app_type == "whatsapp" else "تيليجرام"),
+            "{} <b>لا توجد أرقام {} متاحة حالياً</b>".format(icon, app_name),
             InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_back", lang), callback_data="sms_countries")]])
         ); return
 
@@ -678,8 +682,7 @@ async def sms_app_callback(update, context):
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "💳 رصيدك: <b>${:.3f}</b>\n\n"
         "✅ = يمكنك الشراء  |  💳 = رصيد غير كافٍ\n\n"
-        "🌍 اختر الدولة:".format(
-            icon, "واتساب" if app_type == "whatsapp" else "تيليجرام", bal),
+        "🌍 اختر الدولة:".format(icon, app_name, bal),
         InlineKeyboardMarkup(rows)
     )
 
