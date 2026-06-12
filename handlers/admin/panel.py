@@ -1509,6 +1509,102 @@ async def adm_sms_price_msg_handler(update: Update, context: ContextTypes.DEFAUL
     return True
 
 
+def _force_sub_text(channels: list) -> str:
+    if not channels:
+        return "📌 <b>الاشتراك الإجباري</b>\n\n⭕ لا توجد قنوات إجبارية حالياً."
+    lines = "📌 <b>الاشتراك الإجباري</b>\n\n<b>القنوات المضافة:</b>\n\n"
+    for i, ch in enumerate(channels, 1):
+        name = ch.get("name", "بدون اسم")
+        link = ch.get("link", "—")
+        cid  = ch.get("id", "—")
+        lines += "{}. <b>{}</b>\n   🆔 <code>{}</code>\n   🔗 {}\n\n".format(i, name, cid, link)
+    return lines.strip()
+
+
+async def adm_cfg_force_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db       = context.bot_data["db"]
+    channels = db.get_force_channels()
+    rows = [
+        [InlineKeyboardButton("➕ إضافة قناة / جروب",   callback_data="adm_force_add")],
+        [InlineKeyboardButton("🗑 حذف قناة",             callback_data="adm_force_del")],
+        [InlineKeyboardButton("❌ مسح الكل",             callback_data="adm_force_clear")],
+        [InlineKeyboardButton("🔙 رجوع",                 callback_data="adm_settings")],
+    ]
+    await update.callback_query.edit_message_text(
+        _force_sub_text(channels),
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="HTML"
+    )
+
+
+async def adm_force_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_force_channel"
+    await update.callback_query.edit_message_text(
+        "📌 <b>إضافة قناة اشتراك إجباري</b>\n\n"
+        "أرسل بيانات القناة بالصيغة:\n\n"
+        "<code>CHANNEL_ID | اسم القناة | رابط القناة</code>\n\n"
+        "<b>مثال:</b>\n"
+        "<code>-1001234567890 | قناة الدعم | https://t.me/mychannel</code>\n\n"
+        "📝 <b>ملاحظات:</b>\n"
+        "• CHANNEL_ID يبدأ بـ <code>-100</code>\n"
+        "• اجعل البوت أدمن في القناة أولاً\n"
+        "• الرابط اختياري (اتركه فارغاً لو ما فيش)\n\n"
+        "<b>صيغة بدون رابط:</b>\n"
+        "<code>-1001234567890 | اسم القناة</code>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_force_sub")
+        ]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_force_del_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db       = context.bot_data["db"]
+    channels = db.get_force_channels()
+    if not channels:
+        await update.callback_query.answer("لا توجد قنوات للحذف", show_alert=True)
+        return
+    rows = []
+    for i, ch in enumerate(channels):
+        name = ch.get("name", "قناة {}".format(i+1))
+        rows.append([InlineKeyboardButton(
+            "🗑 {}".format(name),
+            callback_data="adm_force_delone_{}".format(i)
+        )])
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_cfg_force_sub")])
+    await update.callback_query.edit_message_text(
+        "🗑 <b>اختر القناة للحذف:</b>",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="HTML"
+    )
+
+
+async def adm_force_delone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    idx = int(update.callback_query.data.replace("adm_force_delone_", ""))
+    db       = context.bot_data["db"]
+    channels = db.get_force_channels()
+    if 0 <= idx < len(channels):
+        removed = channels.pop(idx)
+        db.set_force_channels(channels)
+        await update.callback_query.answer(
+            "🗑 تم حذف: {}".format(removed.get("name", "")), show_alert=True
+        )
+    update.callback_query.data = "adm_cfg_force_sub"
+    await adm_cfg_force_sub_callback(update, context)
+
+
+async def adm_force_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.bot_data["db"].set_force_channels([])
+    await update.callback_query.answer("✅ تم مسح كل القنوات الإجبارية", show_alert=True)
+    update.callback_query.data = "adm_cfg_force_sub"
+    await adm_cfg_force_sub_callback(update, context)
+
+
 async def adm_force_channel_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """يعالج رسالة إضافة قناة إجبارية"""
     if context.user_data.get("adm_state") != "waiting_force_channel":
