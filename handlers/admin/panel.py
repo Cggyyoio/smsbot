@@ -751,6 +751,7 @@ ADMIN_STATES = (
     "waiting_setting_val", "waiting_user_search",
     "waiting_addbal", "waiting_subbal", "waiting_setbal",
     "waiting_sms_txt", "waiting_sms_price", "waiting_sms_country_price", "waiting_sms_del_phone", "waiting_new_category",
+    "waiting_sms_wa_label", "waiting_sms_tg_label",
     "waiting_force_channel",
     "waiting_instructions_ar", "waiting_instructions_en",
     "waiting_link_activation", "waiting_link_main", "waiting_link_support",
@@ -816,6 +817,22 @@ async def adm_price_msg_handler(update: Update, context: ContextTypes.DEFAULT_TY
             db.set_setting(key, text)
         context.user_data.pop("adm_state", None)
         await update.message.reply_text("✅ تم الحفظ")
+
+    # ── اسم التطبيق الأول (واتساب) ───────────────────────
+    elif state == "waiting_sms_wa_label":
+        if not text:
+            await update.message.reply_text("❌ أرسل اسماً صحيحاً"); return True
+        db.set_setting("sms_wa_label", text)
+        context.user_data.pop("adm_state", None)
+        await update.message.reply_text("✅ اسم التطبيق الأول: <b>{}</b>".format(text), parse_mode="HTML")
+
+    # ── اسم التطبيق الثاني (تيليجرام) ───────────────────
+    elif state == "waiting_sms_tg_label":
+        if not text:
+            await update.message.reply_text("❌ أرسل اسماً صحيحاً"); return True
+        db.set_setting("sms_tg_label", text)
+        context.user_data.pop("adm_state", None)
+        await update.message.reply_text("✅ اسم التطبيق الثاني: <b>{}</b>".format(text), parse_mode="HTML")
 
     # ── بحث مستخدم ───────────────────────────────────────
     elif state == "waiting_user_search":
@@ -1235,19 +1252,22 @@ async def adm_sms_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wa_total  = db.get_sms_total_available("whatsapp")
     tg_total  = db.get_sms_total_available("telegram")
     default   = db.get_setting("sms_price", "0.5")
+    wa_label  = db.get_setting("sms_wa_label", "واتساب")
+    tg_label  = db.get_setting("sms_tg_label", "تيليجرام")
     await update.callback_query.edit_message_text(
         "📱 <b>إدارة أرقام SMS</b>\n\n"
-        "💬 واتساب متاح: <b>{}</b>\n"
-        "✈️ تيليجرام متاح: <b>{}</b>\n"
-        "💰 السعر الافتراضي: <b>${}</b>".format(wa_total, tg_total, default),
+        "💬 {} متاح: <b>{}</b>\n"
+        "✈️ {} متاح: <b>{}</b>\n"
+        "💰 السعر الافتراضي: <b>${}</b>".format(wa_label, wa_total, tg_label, tg_total, default),
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📤 رفع ملف واتساب",      callback_data="adm_sms_upload_wa")],
-            [InlineKeyboardButton("📤 رفع ملف تيليجرام",    callback_data="adm_sms_upload_tg")],
-            [InlineKeyboardButton("💰 السعر الافتراضي",     callback_data="adm_sms_price")],
-            [InlineKeyboardButton("🌍 سعر دولة محددة",      callback_data="adm_sms_country_price")],
-            [InlineKeyboardButton("📋 عرض الأرقام",         callback_data="adm_sms_list")],
-            [InlineKeyboardButton("🗑 حذف أرقام",           callback_data="adm_sms_delete_menu")],
-            [InlineKeyboardButton("🔙 رجوع",                callback_data="adm_main")],
+            [InlineKeyboardButton("📤 رفع ملف {}".format(wa_label),  callback_data="adm_sms_upload_wa")],
+            [InlineKeyboardButton("📤 رفع ملف {}".format(tg_label),  callback_data="adm_sms_upload_tg")],
+            [InlineKeyboardButton("💰 السعر الافتراضي",              callback_data="adm_sms_price")],
+            [InlineKeyboardButton("🌍 سعر دولة محددة",               callback_data="adm_sms_country_price")],
+            [InlineKeyboardButton("✏️ تغيير أسماء التطبيقات",        callback_data="adm_sms_app_labels")],
+            [InlineKeyboardButton("📋 عرض الأرقام",                  callback_data="adm_sms_list")],
+            [InlineKeyboardButton("🗑 حذف أرقام",                    callback_data="adm_sms_delete_menu")],
+            [InlineKeyboardButton("🔙 رجوع",                         callback_data="adm_main")],
         ]),
         parse_mode="HTML"
     )
@@ -1293,9 +1313,59 @@ async def adm_sms_price_callback(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
+async def adm_sms_app_labels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض وتغيير أسماء التطبيقين"""
+    if not is_admin(update, context): return
+    db       = context.bot_data["db"]
+    wa_label = db.get_setting("sms_wa_label", "واتساب")
+    tg_label = db.get_setting("sms_tg_label", "تيليجرام")
+    await update.callback_query.edit_message_text(
+        "✏️ <b>أسماء التطبيقات</b>\n\n"
+        "💬 التطبيق الأول (واتساب): <b>{}</b>\n"
+        "✈️ التطبيق الثاني (تيليجرام): <b>{}</b>\n\n"
+        "اختر التطبيق الذي تريد تغيير اسمه:".format(wa_label, tg_label),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("💬 تغيير اسم التطبيق الأول", callback_data="adm_sms_set_wa_label")],
+            [InlineKeyboardButton("✈️ تغيير اسم التطبيق الثاني", callback_data="adm_sms_set_tg_label")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_sms_set_wa_label_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    current = db.get_setting("sms_wa_label", "واتساب")
+    context.user_data["adm_state"] = "waiting_sms_wa_label"
+    await update.callback_query.edit_message_text(
+        "💬 <b>اسم التطبيق الأول</b>\n\n"
+        "الاسم الحالي: <b>{}</b>\n\n"
+        "أرسل الاسم الجديد:".format(current),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_app_labels")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_sms_set_tg_label_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    current = db.get_setting("sms_tg_label", "تيليجرام")
+    context.user_data["adm_state"] = "waiting_sms_tg_label"
+    await update.callback_query.edit_message_text(
+        "✈️ <b>اسم التطبيق الثاني</b>\n\n"
+        "الاسم الحالي: <b>{}</b>\n\n"
+        "أرسل الاسم الجديد:".format(current),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_app_labels")]]),
+        parse_mode="HTML"
+    )
+
+
 async def adm_sms_country_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
     db = context.bot_data["db"]
+    wa_label     = db.get_setting("sms_wa_label", "واتساب")
+    tg_label     = db.get_setting("sms_tg_label", "تيليجرام")
     wa_countries = db.get_sms_countries("whatsapp")
     tg_countries = db.get_sms_countries("telegram")
     all_countries = wa_countries + tg_countries
@@ -1303,30 +1373,36 @@ async def adm_sms_country_price_callback(update: Update, context: ContextTypes.D
         await update.callback_query.answer("لا توجد دول مضافة بعد", show_alert=True); return
     rows = []
     for c in all_countries:
-        icon = "💬" if c["app_type"] == "whatsapp" else "✈️"
+        app_name = wa_label if c["app_type"] == "whatsapp" else tg_label
+        icon     = "💬" if c["app_type"] == "whatsapp" else "✈️"
         rows.append([InlineKeyboardButton(
-            "{} {} — ${:.2f}".format(icon, c["country"], float(c.get("price", 0.5))),
+            "{} {} | {} — ${:.2f}".format(icon, app_name, c["country"], float(c.get("price", 0.5))),
             callback_data="adm_sms_setcp_{}_{}".format(c["app_type"], c["country"])
         )])
     rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms")])
     await update.callback_query.edit_message_text(
-        "🌍 <b>تحديد سعر دولة</b>\n\nاختر:", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
+        "🌍 <b>تحديد سعر دولة</b>\n\nاختر الدولة والتطبيق لتعديل سعره:",
+        reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML"
     )
 
 
 async def adm_sms_setcp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
-    data    = update.callback_query.data.replace("adm_sms_setcp_", "", 1)
-    parts   = data.split("_", 1)
+    db       = context.bot_data["db"]
+    data     = update.callback_query.data.replace("adm_sms_setcp_", "", 1)
+    parts    = data.split("_", 1)
     app_type = parts[0]
     country  = parts[1] if len(parts) > 1 else ""
     context.user_data["adm_state"]       = "waiting_sms_country_price"
     context.user_data["adm_sms_country"] = country
     context.user_data["adm_sms_app"]     = app_type
-    current = context.bot_data["db"].get_sms_price(country, app_type)
-    icon = "💬" if app_type == "whatsapp" else "✈️"
+    current  = db.get_sms_price(country, app_type)
+    app_name = db.get_setting("sms_wa_label", "واتساب") if app_type == "whatsapp" else db.get_setting("sms_tg_label", "تيليجرام")
+    icon     = "💬" if app_type == "whatsapp" else "✈️"
     await update.callback_query.edit_message_text(
-        "💰 {} <b>{}</b>\nالسعر الحالي: <b>${:.2f}</b>\n\nأرسل السعر الجديد:".format(icon, country, current),
+        "💰 {} <b>{}</b> — <b>{}</b>\n"
+        "السعر الحالي: <b>${:.2f}</b>\n\n"
+        "أرسل السعر الجديد:".format(icon, app_name, country, current),
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_sms_country_price")]]),
         parse_mode="HTML"
     )
@@ -1334,17 +1410,19 @@ async def adm_sms_setcp_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 async def adm_sms_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
-    db = context.bot_data["db"]
+    db       = context.bot_data["db"]
+    wa_label = db.get_setting("sms_wa_label", "واتساب")
+    tg_label = db.get_setting("sms_tg_label", "تيليجرام")
     wa = db.get_sms_countries("whatsapp")
     tg = db.get_sms_countries("telegram")
     text = "📋 <b>أرقام SMS المتاحة</b>\n\n"
     if wa:
-        text += "💬 <b>واتساب:</b>\n"
+        text += "💬 <b>{}:</b>\n".format(wa_label)
         for c in wa:
             text += "  • {} — {} متاح — ${:.2f}\n".format(c["country"], c["available"], float(c.get("price",0.5)))
         text += "\n"
     if tg:
-        text += "✈️ <b>تيليجرام:</b>\n"
+        text += "✈️ <b>{}:</b>\n".format(tg_label)
         for c in tg:
             text += "  • {} — {} متاح — ${:.2f}\n".format(c["country"], c["available"], float(c.get("price",0.5)))
     if not wa and not tg:
