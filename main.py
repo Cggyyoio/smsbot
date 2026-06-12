@@ -11,7 +11,6 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, PreCheckoutQueryHandler, filters
 )
-from telegram.ext import ContextTypes
 from telegram.error import BadRequest, TelegramError
 
 import config
@@ -243,6 +242,7 @@ def register_handlers(app: Application):
         adm_sms_delete_menu_callback, adm_sms_del_country_wa_callback,
         adm_sms_del_country_tg_callback, adm_sms_delcountry_callback,
         adm_sms_del_single_callback,
+        adm_sms_app_labels_callback, adm_sms_set_wa_label_callback, adm_sms_set_tg_label_callback,
         adm_cfg_force_sub_callback, adm_force_add_callback,
         adm_force_del_callback, adm_force_delone_callback, adm_force_clear_callback,
         adm_cfg_instructions_callback,
@@ -428,6 +428,9 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_sms_clear_wa_callback,     pattern="^adm_sms_clear_wa$"))
     app.add_handler(CallbackQueryHandler(adm_sms_clear_tg_callback,     pattern="^adm_sms_clear_tg$"))
     app.add_handler(CallbackQueryHandler(adm_sms_clear_callback,        pattern="^adm_sms_clear_all$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_app_labels_callback,   pattern="^adm_sms_app_labels$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_set_wa_label_callback, pattern="^adm_sms_set_wa_label$"))
+    app.add_handler(CallbackQueryHandler(adm_sms_set_tg_label_callback, pattern="^adm_sms_set_tg_label$"))
 
     # Admin — اشتراك إجباري
     app.add_handler(CallbackQueryHandler(adm_cfg_force_sub_callback, pattern="^adm_cfg_force_sub$"))
