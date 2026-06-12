@@ -161,6 +161,23 @@ class Database:
                 conn.execute("ALTER TABLE sms_numbers ADD COLUMN fail_count INTEGER DEFAULT 0")
             if "app_type" not in sms_cols and sms_cols:
                 conn.execute("ALTER TABLE sms_numbers ADD COLUMN app_type TEXT DEFAULT 'whatsapp'")
+            # migrate: sms_country_prices - add app_type column if missing
+            scp_cols = [r[1] for r in conn.execute("PRAGMA table_info(sms_country_prices)").fetchall()]
+            if scp_cols and "app_type" not in scp_cols:
+                conn.execute("ALTER TABLE sms_country_prices RENAME TO sms_country_prices_old")
+                conn.execute("""
+                    CREATE TABLE sms_country_prices (
+                        country  TEXT NOT NULL,
+                        app_type TEXT NOT NULL DEFAULT 'whatsapp',
+                        price    REAL NOT NULL DEFAULT 0.5,
+                        PRIMARY KEY (country, app_type)
+                    )
+                """)
+                conn.execute("""
+                    INSERT OR IGNORE INTO sms_country_prices (country, app_type, price)
+                    SELECT country, 'whatsapp', price FROM sms_country_prices_old
+                """)
+                conn.execute("DROP TABLE sms_country_prices_old")
         logger.info("[DB] جاهزة ✅")
 
     # ══ Settings ══════════════════════════════════════════
