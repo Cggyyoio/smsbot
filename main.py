@@ -9,7 +9,8 @@ import os
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, PreCheckoutQueryHandler, filters
+    MessageHandler, PreCheckoutQueryHandler, filters,
+    ContextTypes
 )
 from telegram.error import BadRequest, TelegramError
 
