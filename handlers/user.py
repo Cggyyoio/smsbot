@@ -456,18 +456,7 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # إشعار المُحيل
     _apply_referral_earning(db, user.id, price)
-
-    # إشعار القناة عند الشراء
-    await _send_notify(
-        context.bot, db,
-        app_type="تيليجرام",
-        flag=flag, country=cname,
-        phone=num["phone"],
-        code=None,
-        uid=user.id,
-        price=price,
-        status="تم الشراء ⏳"
-    )
+    # إشعار قناة التفعيلات يُرسَل فقط عند وصول الكود (في otp_listener.py)
 
 # ──────────────────────────────────────────────────────────
 #  طلب الكود يدوياً
