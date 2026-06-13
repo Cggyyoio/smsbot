@@ -420,14 +420,16 @@ def _process_session(db, data: bytes, filename: str, extra_files: dict = None, c
                     twofa = fdata.decode("utf-8", errors="ignore").strip()
                     break
 
-    # إصلاح ترتيب أعمدة session
+    # إصلاح ترتيب أعمدة session — Telethon المثبت يتوقع 5 أعمدة فقط
+    # (dc_id, server_address, port, auth_key, takeout_id) بدون tmp_auth_key
     try:
         fix = sq.connect(session_path)
         cols = [r[1] for r in fix.execute("PRAGMA table_info(sessions)").fetchall()]
-        if cols == ["dc_id","server_address","port","auth_key","takeout_id","tmp_auth_key"]:
+        if len(cols) == 6 and "tmp_auth_key" in cols:
             fix.execute("ALTER TABLE sessions RENAME TO sessions_old")
-            fix.execute("CREATE TABLE sessions (dc_id integer primary key, server_address text, port integer, auth_key blob, tmp_auth_key blob, takeout_id integer)")
-            fix.execute("INSERT INTO sessions SELECT dc_id,server_address,port,auth_key,tmp_auth_key,takeout_id FROM sessions_old")
+            fix.execute("CREATE TABLE sessions (dc_id integer primary key, server_address text, port integer, auth_key blob, takeout_id integer)")
+            fix.execute("INSERT INTO sessions(dc_id,server_address,port,auth_key,takeout_id) "
+                        "SELECT dc_id,server_address,port,auth_key,takeout_id FROM sessions_old")
             fix.execute("DROP TABLE sessions_old")
             fix.commit()
         fix.close()
