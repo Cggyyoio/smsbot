@@ -254,25 +254,6 @@ class OtpListener:
             except Exception as e:
                 logger.warning(f"[OTP] فشل تعديل رسالة timeout: {e}")
 
-        # ⑤ إشعار الأدمن
-        try:
-            channel = self.db.get_setting("notify_channel")
-            if channel and channel.strip() not in ("", "0"):
-                await self.bot.send_message(
-                    chat_id=int(channel),
-                    text=(
-                        "⏰ <b>انتهى timeout</b>\n\n"
-                        "📞 الرقم: <code>+{}</code>\n"
-                        "👤 المستخدم: <code>{}</code>\n"
-                        "💰 الرصيد مُسترجع: <b>${:.3f}</b>\n"
-                        "📦 الرقم متاح للبيع مجدداً".format(
-                            phone, order["user_tg_id"], order["cost"]
-                        )
-                    ),
-                    parse_mode="HTML"
-                )
-        except Exception:
-            pass
 
         # فصل الـ client
         await self._detach(phone)
