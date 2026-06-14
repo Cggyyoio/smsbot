@@ -407,10 +407,16 @@ class Database:
 
     def set_order_otp(self, order_id: int, otp: str, msg_id: int = None):
         with self._conn() as conn:
-            conn.execute(
-                "UPDATE orders SET otp_code=?, otp_msg_id=?, status='completed' WHERE id=?",
-                (otp, msg_id, order_id)
-            )
+            if msg_id is not None:
+                conn.execute(
+                    "UPDATE orders SET otp_code=?, otp_msg_id=?, status='completed' WHERE id=?",
+                    (otp, msg_id, order_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE orders SET otp_code=?, status='completed' WHERE id=?",
+                    (otp, order_id)
+                )
 
     def set_order_msg_id(self, order_id: int, msg_id: int):
         with self._conn() as conn:
