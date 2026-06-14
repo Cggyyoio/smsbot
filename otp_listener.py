@@ -291,6 +291,7 @@ class OtpListener:
         self.db.set_order_otp(order_id, code)
 
         msg_id = order.get("otp_msg_id")
+        edited = False
         if msg_id:
             try:
                 await self.bot.edit_message_text(
@@ -299,8 +300,21 @@ class OtpListener:
                     text=build_order_msg(phone, code, twofa=twofa),
                     parse_mode="HTML"
                 )
+                edited = True
             except Exception as e:
-                logger.warning(f"[OTP] فشل تعديل الرسالة: {e}")
+                logger.warning(f"[OTP] فشل تعديل الرسالة (msg_id={msg_id}): {e}")
+        else:
+            logger.warning(f"[OTP] لا يوجد otp_msg_id للطلب #{order_id} — سيتم إرسال رسالة جديدة")
+
+        if not edited:
+            try:
+                await self.bot.send_message(
+                    chat_id=order["user_tg_id"],
+                    text=build_order_msg(phone, code, twofa=twofa),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"[OTP] فشل إرسال رسالة جديدة للمستخدم: {e}")
 
         try:
             channel = self.db.get_setting("notify_channel")
