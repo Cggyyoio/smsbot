@@ -322,6 +322,51 @@ async def adm_new_category_msg_handler(update: Update, context: ContextTypes.DEF
     return True
 
 
+def _extract_sessions_recursive(zip_bytes: bytes) -> list:
+    """
+    يفتح ZIP (مهما كان عمق التداخل: zip في zip في فولدر...)
+    ويرجع قائمة (session_bytes, session_filename, extra_files_dict)
+    extra_files_dict = {filename: bytes} لكل الملفات المجاورة (json, txt...) في نفس المجلد/الأرشيف
+    """
+    results = []
+    try:
+        buf = io.BytesIO(zip_bytes)
+        with zipfile.ZipFile(buf) as zf:
+            names = zf.namelist()
+            for n in names:
+                if n.endswith(".session"):
+                    sdata  = zf.read(n)
+                    sname  = os.path.basename(n)
+                    folder = n.rsplit("/", 1)[0] if "/" in n else ""
+                    base   = sname[:-len(".session")]  # الاسم بدون الامتداد، للمطابقة
+                    extra  = {}
+                    for sib in names:
+                        if sib == n:
+                            continue
+                        sib_folder = sib.rsplit("/", 1)[0] if "/" in sib else ""
+                        if sib_folder != folder:
+                            continue
+                        if sib.endswith(".session") or sib.endswith(".zip"):
+                            continue
+                        sib_base = os.path.basename(sib).rsplit(".", 1)[0]
+                        # نأخذ الملفات المطابقة لاسم نفس الرقم، أو ملفات عامة (2fa.txt, info.json...)
+                        is_match  = (sib_base == base or sib_base.lstrip("+") == base.lstrip("+"))
+                        is_generic = "2fa" in sib_base.lower() or sib_base.lower() in ("info", "data", "config")
+                        if is_match or is_generic:
+                            try: extra[os.path.basename(sib)] = zf.read(sib)
+                            except Exception: pass
+                    results.append((sdata, sname, extra))
+                elif n.endswith(".zip"):
+                    try:
+                        inner_data = zf.read(n)
+                        results.extend(_extract_sessions_recursive(inner_data))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return results
+
+
 async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if context.user_data.get("adm_state") != "waiting_sessions":
         return False
@@ -342,44 +387,14 @@ async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif fname.endswith(".zip"):
         try:
-            buf = io.BytesIO(bytes(data))
-            with zipfile.ZipFile(buf) as zf:
-                names = zf.namelist()
-                for n in names:
-                    if n.endswith(".session"):
-                        sdata  = zf.read(n)
-                        sname  = os.path.basename(n)
-                        folder = n.split("/")[0] if "/" in n else ""
-                        extra  = {}
-                        for sib in names:
-                            if folder and sib.startswith(folder + "/") and not sib.endswith(".session"):
-                                try: extra[os.path.basename(sib)] = zf.read(sib)
-                                except Exception: pass
-                        r = _process_session(db, sdata, sname, extra_files=extra, category=category)
-                        added += r["added"]; skipped += r["skipped"]
-                        twofa_count += int(r.get("twofa", False))
-                    elif n.endswith(".zip"):
-                        inner_buf = io.BytesIO(zf.read(n))
-                        try:
-                            with zipfile.ZipFile(inner_buf) as izf:
-                                inames = izf.namelist()
-                                for iname in inames:
-                                    if iname.endswith(".session"):
-                                        sdata   = izf.read(iname)
-                                        sname   = os.path.basename(iname)
-                                        ifolder = iname.split("/")[0] if "/" in iname else ""
-                                        extra   = {}
-                                        for isib in inames:
-                                            if ifolder and isib.startswith(ifolder + "/") and not isib.endswith(".session"):
-                                                try: extra[os.path.basename(isib)] = izf.read(isib)
-                                                except Exception: pass
-                                        r = _process_session(db, sdata, sname, extra_files=extra, category=category)
-                                        added += r["added"]; skipped += r["skipped"]
-                                        twofa_count += int(r.get("twofa", False))
-                        except Exception: pass
+            sessions = _extract_sessions_recursive(bytes(data))
         except Exception as e:
             await update.message.reply_text("❌ خطأ في ZIP: {}".format(e))
             return True
+        for sdata, sname, extra in sessions:
+            r = _process_session(db, sdata, sname, extra_files=extra, category=category)
+            added += r["added"]; skipped += r["skipped"]
+            twofa_count += int(r.get("twofa", False))
 
     cat_line = "📦 الفئة: <b>{}</b>\n".format(category) if category else ""
     await update.message.reply_text(
@@ -396,6 +411,7 @@ async def adm_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def _process_session(db, data: bytes, filename: str, extra_files: dict = None, category: str = None) -> dict:
     import sqlite3 as sq, json as _json
     phone        = filename.replace(".session", "").split("/")[-1].split("\\")[-1]
+    phone        = phone.lstrip("+")  # توحيد الصيغة: بدون + في التخزين (يُضاف عند العرض)
     sessions_dir = "sessions"
     os.makedirs(sessions_dir, exist_ok=True)
     session_path = os.path.join(sessions_dir, "{}.session".format(phone))
@@ -406,19 +422,44 @@ def _process_session(db, data: bytes, filename: str, extra_files: dict = None, c
         f.write(data)
 
     twofa = None
+
+    def _find_twofa(obj):
+        """يبحث عن قيمة 2FA في أي مستوى من JSON بأي اسم حقل معروف"""
+        keys = (
+            "twoFA", "twofa", "two_fa", "TwoFA", "2fa", "2FA",
+            "password", "Password", "cloud_password", "cloudPassword",
+            "twoFaPass", "2fa_password", "2faPassword"
+        )
+        if isinstance(obj, dict):
+            for k in keys:
+                v = obj.get(k)
+                if v and str(v).strip():
+                    return str(v).strip()
+            for v in obj.values():
+                if isinstance(v, (dict, list)):
+                    r = _find_twofa(v)
+                    if r: return r
+        elif isinstance(obj, list):
+            for item in obj:
+                r = _find_twofa(item)
+                if r: return r
+        return None
+
     if extra_files:
         for fname, fdata in extra_files.items():
             if fname.endswith(".json"):
                 try:
                     jdata = _json.loads(fdata.decode("utf-8", errors="ignore"))
-                    twofa = jdata.get("twoFA") or jdata.get("twofa") or jdata.get("two_fa")
+                    twofa = _find_twofa(jdata)
                     if twofa: break
                 except Exception: pass
         if not twofa:
             for fname, fdata in extra_files.items():
                 if "2fa" in fname.lower() and fname.endswith(".txt"):
-                    twofa = fdata.decode("utf-8", errors="ignore").strip()
-                    break
+                    val = fdata.decode("utf-8", errors="ignore").strip()
+                    if val:
+                        twofa = val
+                        break
 
     # إصلاح ترتيب أعمدة session — Telethon المثبت يتوقع 5 أعمدة فقط
     # (dc_id, server_address, port, auth_key, takeout_id) بدون tmp_auth_key
