@@ -284,6 +284,11 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(sms_app_callback,       pattern=r"^sms_app_(whatsapp|telegram)$"))
     app.add_handler(CallbackQueryHandler(sms_buy_callback,       pattern=r"^sms_buy_.+$"))
 
+    # User — أزرار إلغاء/حظر رقم SMS
+    from handlers.sms_actions import sms_cancel_callback, sms_block_callback
+    app.add_handler(CallbackQueryHandler(sms_cancel_callback, pattern=r"^sms_cancel_\d+$"))
+    app.add_handler(CallbackQueryHandler(sms_block_callback,  pattern=r"^sms_block_\d+$"))
+
     # ━━━━━━━━━━━━━━━━━━━━━━ Stars ━━━━━━━━━━━━━━━━━━━━━━━━━
     app.add_handler(CallbackQueryHandler(charge_stars_callback, pattern="^charge_stars$"))
     app.add_handler(CallbackQueryHandler(stars_preset_callback, pattern=r"^stars_buy_\d+(\.\d+)?$"))

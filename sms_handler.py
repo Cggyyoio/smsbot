@@ -10,13 +10,30 @@ import asyncio
 import logging
 import re
 import json
+import os
+import random
 import aiohttp
 from telegram.error import BadRequest
 
 logger = logging.getLogger(__name__)
 
-SMS_TIMEOUT   = 10 * 60   # 10 دقائق
-POLL_INTERVAL = 5          # كل 5 ثواني
+SMS_TIMEOUT     = 10 * 60   # 10 دقائق
+POLL_INTERVAL   = 5          # كل 5 ثواني
+SMS_ACTION_WAIT = 30         # ثواني قبل تفعيل أزرار إلغاء/حظر الرقم
+
+NAMES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "names.txt")
+
+
+def get_random_name() -> str:
+    """يرجع اسماً عشوائياً من ملف names.txt"""
+    try:
+        with open(NAMES_FILE, "r", encoding="utf-8") as f:
+            names = [n.strip() for n in f.readlines() if n.strip()]
+        if names:
+            return random.choice(names)
+    except Exception:
+        pass
+    return "Alex Morgan"
 
 
 # ──────────────────────────────────────────────────────────
@@ -112,7 +129,8 @@ def _build_sms_waiting_msg(phone: str, country: str) -> str:
 def _sms_waiting_kb(order_id: int):
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ إلغاء واسترداد الرصيد", callback_data="sms_cancel_{}".format(order_id))
+        InlineKeyboardButton("❌ إلغاء الرقم", callback_data="sms_cancel_{}".format(order_id)),
+        InlineKeyboardButton("🚫 حظر الرقم",  callback_data="sms_block_{}".format(order_id)),
     ]])
 
 
@@ -132,6 +150,8 @@ def _build_sms_done_msg(phone: str, country: str, code: str, full_response: str)
         display = full_response[:800] + ("..." if len(full_response) > 800 else "")
         msg += "\n📩 <b>الرسالة الكاملة:</b>\n<code>{}</code>\n".format(display)
 
+    suggested_name = get_random_name()
+    msg += "\n📝 <b>اسم مقترح:</b> <code>{}</code>\n".format(suggested_name)
     msg += "\n<i>✅ احفظ هذه البيانات في مكان آمن</i>"
     return msg
 
@@ -196,7 +216,8 @@ class SmsPoller:
                                         chat_id=chat_id,
                                         message_id=msg_id,
                                         text=done_text,
-                                        parse_mode="HTML"
+                                        parse_mode="HTML",
+                                        reply_markup=None
                                     )
                                 except BadRequest as e:
                                     if "not modified" not in str(e).lower():
@@ -260,7 +281,8 @@ class SmsPoller:
                     chat_id=chat_id,
                     message_id=msg_id,
                     text=_build_sms_expired_msg(phone, country) + expired_extra,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=None
                 )
             except BadRequest:
                 pass

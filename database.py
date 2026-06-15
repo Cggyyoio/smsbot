@@ -142,6 +142,14 @@ class Database:
                     pending      REAL DEFAULT 0.0,
                     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS sms_excluded (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_tg_id INTEGER NOT NULL,
+                    phone      TEXT NOT NULL,
+                    reason     TEXT DEFAULT 'cancel',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_tg_id, phone)
+                );
             """)
             # migrate: add is_banned if not exist
             cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
@@ -541,11 +549,32 @@ class Database:
             return [dict(r) for r in rows]
 
     def lock_sms_number(self, country: str, user_tg_id: int, app_type: str = "whatsapp") -> dict | None:
+        """
+        يحجز رقم متاح، مع تجنّب الأرقام المستبعدة لهذا المستخدم
+        (التي سبق إلغاؤها أو حظرها من قِبَله)، إلا إذا لم يتبقَّ
+        سوى هذه الأرقام فقط — في هذه الحالة يُسمح بإعادة استخدامها.
+        """
         with self._conn() as conn:
-            r = conn.execute(
-                "SELECT * FROM sms_numbers WHERE country=? AND app_type=? AND status='available' LIMIT 1",
-                (country, app_type)
-            ).fetchone()
+            excluded = {row[0] for row in conn.execute(
+                "SELECT phone FROM sms_excluded WHERE user_tg_id=?", (user_tg_id,)
+            ).fetchall()}
+
+            r = None
+            if excluded:
+                placeholders = ",".join("?" * len(excluded))
+                r = conn.execute(
+                    "SELECT * FROM sms_numbers WHERE country=? AND app_type=? AND status='available' "
+                    "AND phone NOT IN ({}) LIMIT 1".format(placeholders),
+                    (country, app_type, *excluded)
+                ).fetchone()
+
+            if not r:
+                # لا يوجد رقم غير مستبعد — أو لا توجد استبعادات أصلاً
+                r = conn.execute(
+                    "SELECT * FROM sms_numbers WHERE country=? AND app_type=? AND status='available' LIMIT 1",
+                    (country, app_type)
+                ).fetchone()
+
             if not r:
                 return None
             conn.execute(
@@ -553,6 +582,20 @@ class Database:
                 (user_tg_id, r["id"])
             )
             return dict(r)
+
+    def add_sms_exclusion(self, user_tg_id: int, phone: str, reason: str = "cancel"):
+        """يستبعد رقماً معيناً عن مستخدم معين (لن يُعرض له مجدداً إلا كحل أخير)"""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO sms_excluded(user_tg_id, phone, reason) VALUES(?,?,?)",
+                (user_tg_id, phone, reason)
+            )
+
+    def get_sms_excluded_phones(self, user_tg_id: int) -> set:
+        with self._conn() as conn:
+            return {row[0] for row in conn.execute(
+                "SELECT phone FROM sms_excluded WHERE user_tg_id=?", (user_tg_id,)
+            ).fetchall()}
 
     def get_sms_total_available(self, app_type: str = None) -> int:
         with self._conn() as conn:
