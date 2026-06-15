@@ -712,13 +712,14 @@ async def sms_buy_callback(update, context):
         phone=num["phone"], country=country, cost=price
     )
 
-    from sms_handler import _build_sms_waiting_msg
+    from sms_handler import _build_sms_waiting_msg, _sms_waiting_kb
     icon = "💬" if app_type == "whatsapp" else "✈️"
     display_country = "{} {}".format(icon, country)
     msg = await context.bot.send_message(
         chat_id=user.id,
         text=_build_sms_waiting_msg(num["phone"], display_country),
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=_sms_waiting_kb(order_id)
     )
     db.set_sms_order_msg_id(order_id, msg.message_id)
 
