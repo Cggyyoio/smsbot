@@ -46,6 +46,15 @@ def build_order_msg(phone: str, code: str, twofa: str = None) -> str:
     return msg
 
 
+def build_rebuy_kb(country_code: str):
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    if not country_code:
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔁 شراء رقم آخر من نفس الدولة", callback_data="buy_num_{}".format(country_code))
+    ]])
+
+
 def _extract_code(text: str) -> str | None:
     """أي 5 أرقام متتالية — أول تطابق"""
     if not text:
@@ -298,7 +307,8 @@ class OtpListener:
                     chat_id=order["user_tg_id"],
                     message_id=msg_id,
                     text=build_order_msg(phone, code, twofa=twofa),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=build_rebuy_kb(order.get("country_code"))
                 )
                 edited = True
             except Exception as e:
@@ -311,7 +321,8 @@ class OtpListener:
                 await self.bot.send_message(
                     chat_id=order["user_tg_id"],
                     text=build_order_msg(phone, code, twofa=twofa),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=build_rebuy_kb(order.get("country_code"))
                 )
             except Exception as e:
                 logger.warning(f"[OTP] فشل إرسال رسالة جديدة للمستخدم: {e}")
