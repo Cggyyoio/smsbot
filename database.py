@@ -150,6 +150,18 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_tg_id, phone)
                 );
+                CREATE TABLE IF NOT EXISTS favorites (
+                    user_tg_id   INTEGER NOT NULL,
+                    country_code TEXT NOT NULL,
+                    PRIMARY KEY (user_tg_id, country_code)
+                );
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id   INTEGER NOT NULL,
+                    action     TEXT NOT NULL,
+                    details    TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             # migrate: add is_banned if not exist
             cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
@@ -159,6 +171,8 @@ class Database:
                 conn.execute("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'ar'")
             if "onboarded" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0")
+            if "low_balance_warned" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN low_balance_warned INTEGER DEFAULT 0")
             # migrate: add twofa to orders if not exist
             ocols = [r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()]
             if "twofa" not in ocols:
@@ -345,6 +359,50 @@ class Database:
                     pass
         with self._conn() as conn:
             conn.execute("DELETE FROM numbers WHERE id=?", (number_id,))
+
+    def delete_numbers_by_country(self, country_code: str):
+        """حذف كل الأرقام (متاحة + مباعة) لدولة/فئة معينة مع ملفاتها"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, session_path FROM numbers WHERE country_code=?", (country_code,)
+            ).fetchall()
+        for r in rows:
+            try:
+                p = r["session_path"]
+            except Exception:
+                p = r[1]
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        with self._conn() as conn:
+            conn.execute("DELETE FROM numbers WHERE country_code=?", (country_code,))
+
+    def delete_number_by_phone(self, phone: str) -> bool:
+        """حذف رقم واحد بالبحث عن رقم الهاتف (مع/بدون +)"""
+        clean = phone.lstrip("+").strip()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id FROM numbers WHERE phone=? OR phone=?", (clean, "+" + clean)
+            ).fetchone()
+        if not row:
+            return False
+        self.delete_number(row["id"] if hasattr(row, "keys") else row[0])
+        return True
+
+    def delete_all_numbers(self):
+        """حذف كل الأرقام الجاهزة (متاحة + مباعة) مع كل ملفاتها"""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT id, session_path FROM numbers").fetchall()
+        for r in rows:
+            try:
+                p = r["session_path"]
+            except Exception:
+                p = r[1]
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        with self._conn() as conn:
+            conn.execute("DELETE FROM numbers")
 
     def release_number(self, number_id: int):
         with self._conn() as conn:
@@ -933,3 +991,160 @@ class Database:
                 "SELECT DISTINCT country_name FROM numbers WHERE country_code LIKE 'CAT_%' ORDER BY country_name"
             ).fetchall()
             return [r[0] for r in rows]
+
+    # ══ Favorites — الدول المفضلة للمستخدم ════════════════
+    def toggle_favorite(self, user_tg_id: int, country_code: str) -> bool:
+        """يضيف/يحذف من المفضلة. يرجع True لو أُضيفت، False لو حُذفت"""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM favorites WHERE user_tg_id=? AND country_code=?",
+                (user_tg_id, country_code)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "DELETE FROM favorites WHERE user_tg_id=? AND country_code=?",
+                    (user_tg_id, country_code)
+                )
+                return False
+            conn.execute(
+                "INSERT OR IGNORE INTO favorites(user_tg_id, country_code) VALUES(?,?)",
+                (user_tg_id, country_code)
+            )
+            return True
+
+    def get_favorites(self, user_tg_id: int) -> list:
+        with self._conn() as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT country_code FROM favorites WHERE user_tg_id=?", (user_tg_id,)
+            ).fetchall()]
+
+    def is_favorite(self, user_tg_id: int, country_code: str) -> bool:
+        with self._conn() as conn:
+            r = conn.execute(
+                "SELECT 1 FROM favorites WHERE user_tg_id=? AND country_code=?",
+                (user_tg_id, country_code)
+            ).fetchone()
+            return bool(r)
+
+    # ══ سجل OTP — آخر الأكواد المستلمة للمستخدم ═══════════
+    def get_recent_codes(self, user_tg_id: int, limit: int = 5) -> list:
+        """يرجع آخر الأكواد (تيليجرام + SMS) لمستخدم معين، الأحدث أولاً"""
+        with self._conn() as conn:
+            tg_rows = conn.execute(
+                "SELECT phone, otp_code, country_code as country, created_at, 'tg' as kind "
+                "FROM orders WHERE user_tg_id=? AND otp_code IS NOT NULL AND otp_code NOT LIKE 'cancelled%' "
+                "ORDER BY id DESC LIMIT ?", (user_tg_id, limit)
+            ).fetchall()
+            sms_rows = conn.execute(
+                "SELECT phone, otp_code, country, created_at, 'sms' as kind "
+                "FROM sms_orders WHERE user_tg_id=? AND otp_code IS NOT NULL "
+                "ORDER BY id DESC LIMIT ?", (user_tg_id, limit)
+            ).fetchall()
+            combined = [dict(r) for r in tg_rows] + [dict(r) for r in sms_rows]
+            combined.sort(key=lambda r: r["created_at"], reverse=True)
+            return combined[:limit]
+
+    # ══ بحث عن رقم (أدمن) ══════════════════════════════════
+    def search_number(self, phone: str) -> dict | None:
+        """يبحث في الأرقام الجاهزة وأرقام SMS عن رقم معين ويرجع كل التفاصيل"""
+        clean = phone.lstrip("+").strip()
+        with self._conn() as conn:
+            num = conn.execute(
+                "SELECT * FROM numbers WHERE phone=? OR phone=?", (clean, "+" + clean)
+            ).fetchone()
+            if num:
+                num = dict(num)
+                order = conn.execute(
+                    "SELECT * FROM orders WHERE number_id=? ORDER BY id DESC LIMIT 1", (num["id"],)
+                ).fetchone()
+                num["kind"]  = "ready"
+                num["order"] = dict(order) if order else None
+                return num
+
+            sms_num = conn.execute(
+                "SELECT * FROM sms_numbers WHERE phone=? OR phone=?", (clean, "+" + clean)
+            ).fetchone()
+            if sms_num:
+                sms_num = dict(sms_num)
+                order = conn.execute(
+                    "SELECT * FROM sms_orders WHERE sms_num_id=? ORDER BY id DESC LIMIT 1", (sms_num["id"],)
+                ).fetchone()
+                sms_num["kind"]  = "sms"
+                sms_num["order"] = dict(order) if order else None
+                return sms_num
+        return None
+
+    # ══ أداء الدول (للأدمن) ════════════════════════════════
+    def get_country_performance(self, limit: int = 10) -> list:
+        """يرجع أداء كل دولة: مبيعات، إلغاءات (timeout/cancel)، نسبة نجاح"""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT
+                    country_code,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) as cancelled
+                FROM orders
+                GROUP BY country_code
+                ORDER BY total DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                d["success_rate"] = round(100 * d["completed"] / d["total"], 1) if d["total"] else 0
+                result.append(d)
+            return result
+
+    # ══ تنبيه نفاد المخزون ═════════════════════════════════
+    def get_low_stock_countries(self, threshold: int = 3) -> list:
+        """يرجع الدول (تيليجرام) التي عدد المتاح فيها أقل من أو يساوي threshold"""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT country_code, country_name, country_flag,
+                       SUM(CASE WHEN status='available' THEN 1 ELSE 0 END) as available
+                FROM numbers
+                GROUP BY country_code
+                HAVING available <= ? AND available >= 0
+                ORDER BY available ASC
+            """, (threshold,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_low_stock_sms(self, threshold: int = 3) -> list:
+        """يرجع دول/تطبيقات SMS التي عدد المتاح فيها أقل من أو يساوي threshold"""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT country, app_type,
+                       SUM(CASE WHEN status='available' THEN 1 ELSE 0 END) as available
+                FROM sms_numbers
+                GROUP BY country, app_type
+                HAVING available <= ?
+                ORDER BY available ASC
+            """, (threshold,)).fetchall()
+            return [dict(r) for r in rows]
+
+    # ══ سجل العمليات الحساسة (أدمن) ════════════════════════
+    def log_admin_action(self, admin_id: int, action: str, details: str = ""):
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO audit_log(admin_id, action, details) VALUES(?,?,?)",
+                (admin_id, action, details)
+            )
+
+    def get_audit_log(self, limit: int = 20) -> list:
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()]
+
+    # ══ تنبيه انخفاض الرصيد (مرة واحدة لكل انخفاض) ════════
+    def get_low_balance_warned(self, tg_id: int) -> bool:
+        with self._conn() as conn:
+            r = conn.execute("SELECT low_balance_warned FROM users WHERE tg_id=?", (tg_id,)).fetchone()
+            return bool(r and r[0])
+
+    def set_low_balance_warned(self, tg_id: int, value: bool):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE users SET low_balance_warned=? WHERE tg_id=?", (1 if value else 0, tg_id)
+            )

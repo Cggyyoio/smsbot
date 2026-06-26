@@ -56,6 +56,8 @@ async def message_router(update: Update, context):
         adm_sms_file_handler, adm_sms_price_msg_handler,
         adm_force_channel_msg_handler,
         adm_new_category_msg_handler,
+        adm_num_del_phone_msg_handler,
+        adm_search_number_msg_handler,
         adm_instructions_msg_handler,
         adm_links_msg_handler,
         adm_coupon_create_msg_handler,
@@ -117,6 +119,14 @@ async def message_router(update: Update, context):
 
     # ⑧ فئة رفع جديدة
     if await adm_new_category_msg_handler(update, context):
+        return
+
+    # ⑧.5 حذف رقم جاهز واحد
+    if await adm_num_del_phone_msg_handler(update, context):
+        return
+
+    # ⑧.6 بحث عن رقم (أدمن)
+    if await adm_search_number_msg_handler(update, context):
         return
 
     # ⑨ قناة اشتراك إجباري
@@ -209,6 +219,7 @@ def register_handlers(app: Application):
         buy_country_callback, buy_number_callback,
         confirm_buy_callback, get_otp_callback,
         my_orders_callback, deposit_callback,
+        otp_history_callback, toggle_favorite_callback,
         charge_usdt_menu_callback,
         sms_countries_callback, sms_buy_callback, sms_app_callback,
         check_sub_callback,
@@ -219,6 +230,10 @@ def register_handlers(app: Application):
     # ── Admin ─────────────────────────────────────────────
     from handlers.admin.panel import (
         admin_callback, adm_numbers_callback, adm_num_cc_callback,
+        adm_num_delete_menu_callback, adm_num_del_country_list_callback,
+        adm_num_delcountry_callback, adm_num_del_single_callback,
+        adm_num_clear_all_callback, adm_num_clear_all_confirm_callback,
+        adm_num_del_phone_msg_handler,
         adm_upload_callback, adm_upload_normal_callback, adm_upload_newcat_callback,
         adm_upload_cat_callback, adm_new_category_msg_handler,
         adm_prices_callback, adm_setprice_callback,
@@ -272,6 +287,8 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(confirm_buy_callback,      pattern=r"^confirm_buy_.+$"))
     app.add_handler(CallbackQueryHandler(get_otp_callback,          pattern=r"^get_otp_\d+$"))
     app.add_handler(CallbackQueryHandler(my_orders_callback,        pattern="^my_orders$"))
+    app.add_handler(CallbackQueryHandler(otp_history_callback,      pattern="^otp_history$"))
+    app.add_handler(CallbackQueryHandler(toggle_favorite_callback,  pattern=r"^toggle_fav_.+$"))
     app.add_handler(CallbackQueryHandler(deposit_callback,          pattern="^deposit$"))
     app.add_handler(CallbackQueryHandler(charge_usdt_menu_callback, pattern="^charge_usdt_menu$"))
     app.add_handler(CallbackQueryHandler(check_sub_callback,        pattern="^check_sub$"))
@@ -377,6 +394,12 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_stats_callback,     pattern="^adm_stats$"))
     app.add_handler(CallbackQueryHandler(adm_numbers_callback,   pattern="^adm_numbers$"))
     app.add_handler(CallbackQueryHandler(adm_num_cc_callback,    pattern=r"^adm_num_cc_.+$"))
+    app.add_handler(CallbackQueryHandler(adm_num_delete_menu_callback,        pattern="^adm_num_delete_menu$"))
+    app.add_handler(CallbackQueryHandler(adm_num_del_country_list_callback,   pattern="^adm_num_del_country_list$"))
+    app.add_handler(CallbackQueryHandler(adm_num_delcountry_callback,         pattern=r"^adm_num_delcountry_.+$"))
+    app.add_handler(CallbackQueryHandler(adm_num_del_single_callback,         pattern="^adm_num_del_single$"))
+    app.add_handler(CallbackQueryHandler(adm_num_clear_all_callback,          pattern="^adm_num_clear_all$"))
+    app.add_handler(CallbackQueryHandler(adm_num_clear_all_confirm_callback,  pattern="^adm_num_clear_all_confirm$"))
     app.add_handler(CallbackQueryHandler(adm_upload_callback,        pattern="^adm_upload$"))
     app.add_handler(CallbackQueryHandler(adm_upload_normal_callback, pattern="^adm_upload_normal$"))
     app.add_handler(CallbackQueryHandler(adm_upload_newcat_callback, pattern="^adm_upload_newcat$"))
@@ -480,6 +503,17 @@ def register_handlers(app: Application):
     app.add_handler(CallbackQueryHandler(adm_send_report_now_callback,  pattern="^adm_send_report_now$"))
     app.add_handler(CallbackQueryHandler(adm_backup_now_callback,       pattern="^adm_backup_now$"))
     app.add_handler(CallbackQueryHandler(adm_restore_backup_callback,   pattern="^adm_restore_backup$"))
+
+    # Admin — أداء الدول / تنبيه المخزون / بحث رقم / سجل عمليات
+    from handlers.admin.panel import (
+        adm_performance_callback, adm_low_stock_callback,
+        adm_search_number_callback, adm_search_number_msg_handler,
+        adm_audit_log_callback,
+    )
+    app.add_handler(CallbackQueryHandler(adm_performance_callback,    pattern="^adm_performance$"))
+    app.add_handler(CallbackQueryHandler(adm_low_stock_callback,      pattern="^adm_low_stock$"))
+    app.add_handler(CallbackQueryHandler(adm_search_number_callback,  pattern="^adm_search_number$"))
+    app.add_handler(CallbackQueryHandler(adm_audit_log_callback,      pattern="^adm_audit_log$"))
 
     # User — إحالة
     from handlers.referral import referral_callback, referral_withdraw_callback, referral_noop_callback
@@ -594,8 +628,10 @@ async def main():
         )
         # Background loops
         from features import daily_report_loop, backup_loop
+        from handlers.admin.panel import low_stock_check_loop
         asyncio.create_task(daily_report_loop(app.bot, db))
         asyncio.create_task(backup_loop(app.bot, db))
+        asyncio.create_task(low_stock_check_loop(app.bot, db))
 
         await asyncio.Event().wait()
         await app.updater.stop()
