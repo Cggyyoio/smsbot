@@ -43,6 +43,14 @@ def admin_main_kb():
             InlineKeyboardButton("👥 المستخدمين",    callback_data="adm_users"),
             InlineKeyboardButton("📢 إشعار جماعي",  callback_data="adm_broadcast"),
         ],
+        [
+            InlineKeyboardButton("📈 أداء الدول",     callback_data="adm_performance"),
+            InlineKeyboardButton("🔍 بحث رقم",        callback_data="adm_search_number"),
+        ],
+        [
+            InlineKeyboardButton("⚠️ تنبيه المخزون",  callback_data="adm_low_stock"),
+            InlineKeyboardButton("📜 سجل العمليات",   callback_data="adm_audit_log"),
+        ],
         [InlineKeyboardButton("⚙️ الإعدادات",        callback_data="adm_settings")],
         [InlineKeyboardButton("🔙 رجوع للقائمة",     callback_data="main_menu")],
     ])
@@ -189,8 +197,9 @@ async def adm_numbers_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     ])
     rows.append([
         InlineKeyboardButton("🗑 حذف كل المباعة", callback_data="adm_del_sold_ALL"),
-        InlineKeyboardButton("🔙 رجوع",            callback_data="adm_main"),
+        InlineKeyboardButton("🗑 حذف أرقام",       callback_data="adm_num_delete_menu"),
     ])
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")])
     await update.callback_query.edit_message_text(
         "📱 <b>الأرقام</b> — متاح: <b>{}</b>".format(total_avail),
         reply_markup=InlineKeyboardMarkup(rows),
@@ -226,10 +235,120 @@ async def adm_num_cc_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 InlineKeyboardButton("📦 ZIP",          callback_data="adm_zip_{}".format(cc)),
             ],
             [InlineKeyboardButton("🗑 حذف المباعة + ملفاتها", callback_data="adm_del_sold_{}".format(cc))],
+            [InlineKeyboardButton("🗑🗑 حذف الدولة كاملة (الكل)", callback_data="adm_num_delcountry_{}".format(cc))],
             [InlineKeyboardButton("🔙 رجوع", callback_data="adm_numbers")],
         ]),
         parse_mode="HTML"
     )
+
+
+# ══════════════════════════════════════════════════════════
+#  حذف الأرقام الجاهزة — قائمة شاملة (دولة/فئة/رقم واحد/الكل)
+# ══════════════════════════════════════════════════════════
+
+async def adm_num_delete_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    await update.callback_query.edit_message_text(
+        "🗑 <b>حذف الأرقام الجاهزة</b>\n\nاختر طريقة الحذف:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑 حذف دولة / فئة",     callback_data="adm_num_del_country_list")],
+            [InlineKeyboardButton("🗑 حذف رقم واحد",        callback_data="adm_num_del_single")],
+            [InlineKeyboardButton("🗑 حذف كل المباعة",     callback_data="adm_del_sold_ALL")],
+            [InlineKeyboardButton("🗑🗑 حذف كل الأرقام (الكل)", callback_data="adm_num_clear_all")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="adm_numbers")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_num_del_country_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db      = context.bot_data["db"]
+    grouped = db.get_all_numbers_grouped()
+    if not grouped:
+        await update.callback_query.answer("لا توجد دول/فئات", show_alert=True)
+        return
+    rows = []
+    for cc, nums in sorted(grouped.items()):
+        flag  = nums[0]["country_flag"]
+        cname = nums[0]["country_name"]
+        rows.append([InlineKeyboardButton(
+            "🗑 {} {} ({} رقم)".format(flag, cname, len(nums)),
+            callback_data="adm_num_delcountry_{}".format(cc)
+        )])
+    rows.append([InlineKeyboardButton("🔙 رجوع", callback_data="adm_num_delete_menu")])
+    await update.callback_query.edit_message_text(
+        "اختر الدولة/الفئة للحذف الكامل (متاح + مباع):",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="HTML"
+    )
+
+
+async def adm_num_delcountry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db    = context.bot_data["db"]
+    cc    = update.callback_query.data.replace("adm_num_delcountry_", "", 1)
+    nums  = db.get_numbers_by_country(cc)
+    count = len(nums)
+    if cc.startswith("CAT_"):
+        flag, cname = "📦", cc[4:]
+    else:
+        flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
+    db.delete_numbers_by_country(cc)
+    await update.callback_query.answer(
+        "✅ تم حذف {} {} ({} رقم)".format(flag, cname, count), show_alert=True
+    )
+    update.callback_query.data = "adm_numbers"
+    await adm_numbers_callback(update, context)
+
+
+async def adm_num_del_single_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_num_del_phone"
+    await update.callback_query.edit_message_text(
+        "📞 أرسل رقم الهاتف للحذف:\n<code>+1234567890</code>\n\n"
+        "(يحذف الرقم وملف الـ session الخاص به نهائياً)",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_num_delete_menu")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_num_clear_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    await update.callback_query.edit_message_text(
+        "⚠️ <b>تأكيد حذف كل الأرقام الجاهزة</b>\n\n"
+        "سيتم حذف <b>كل</b> الأرقام (المتاحة والمباعة) مع كل ملفات الـ session نهائياً.\n"
+        "هذا الإجراء <b>لا يمكن التراجع عنه</b>.\n\n"
+        "هل أنت متأكد؟",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ نعم، حذف الكل نهائياً", callback_data="adm_num_clear_all_confirm")],
+            [InlineKeyboardButton("❌ إلغاء", callback_data="adm_num_delete_menu")],
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_num_clear_all_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db = context.bot_data["db"]
+    db.delete_all_numbers()
+    db.log_admin_action(update.effective_user.id, "حذف كل الأرقام الجاهزة", "حذف شامل (متاح + مباع)")
+    await update.callback_query.answer("✅ تم حذف كل الأرقام الجاهزة", show_alert=True)
+    await adm_numbers_callback(update, context)
+
+
+async def adm_num_del_phone_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if context.user_data.get("adm_state") != "waiting_num_del_phone":
+        return False
+    phone = (update.message.text or "").strip()
+    context.user_data.pop("adm_state", None)
+    db = context.bot_data["db"]
+    ok = db.delete_number_by_phone(phone)
+    if ok:
+        await update.message.reply_text("✅ تم حذف <code>{}</code>".format(phone), parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ الرقم غير موجود: <code>{}</code>".format(phone), parse_mode="HTML")
+    return True
 
 
 # ══════════════════════════════════════════════════════════
@@ -714,6 +833,7 @@ async def adm_ban_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db  = context.bot_data["db"]
     uid = int(update.callback_query.data.replace("adm_ban_", ""))
     db.ban_user(uid)
+    db.log_admin_action(update.effective_user.id, "حظر مستخدم", "UID: {}".format(uid))
     await update.callback_query.answer("🚫 تم الحظر", show_alert=True)
     try:
         await context.bot.send_message(uid, "🚫 <b>تم حظر حسابك.</b>\nتواصل مع الدعم.", parse_mode="HTML")
@@ -727,6 +847,7 @@ async def adm_unban_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db  = context.bot_data["db"]
     uid = int(update.callback_query.data.replace("adm_unban_", ""))
     db.unban_user(uid)
+    db.log_admin_action(update.effective_user.id, "رفع حظر مستخدم", "UID: {}".format(uid))
     await update.callback_query.answer("✅ تم رفع الحظر", show_alert=True)
     try:
         await context.bot.send_message(uid, "✅ <b>تم رفع الحظر عن حسابك.</b>", parse_mode="HTML")
@@ -793,7 +914,7 @@ ADMIN_STATES = (
     "waiting_price", "waiting_default_price", "waiting_broadcast",
     "waiting_setting_val", "waiting_user_search",
     "waiting_addbal", "waiting_subbal", "waiting_setbal",
-    "waiting_sms_txt", "waiting_sms_price", "waiting_sms_country_price", "waiting_sms_del_phone", "waiting_new_category",
+    "waiting_sms_txt", "waiting_sms_price", "waiting_sms_country_price", "waiting_sms_del_phone", "waiting_new_category", "waiting_num_del_phone", "waiting_search_number",
     "waiting_sms_wa_label", "waiting_sms_tg_label",
     "waiting_force_channel",
     "waiting_instructions_ar", "waiting_instructions_en",
@@ -897,6 +1018,8 @@ async def adm_price_msg_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("❌ أرسل رقم صحيح"); return True
         db.add_balance(uid, amount)
         new_bal = db.get_balance(uid)
+        db.log_admin_action(update.effective_user.id, "إضافة رصيد",
+                             "UID: {} | +${:.3f} | الرصيد الجديد: ${:.3f}".format(uid, amount, new_bal))
         await update.message.reply_text(
             "✅ أُضيف <b>${:.3f}</b> للمستخدم <code>{}</code>\nالرصيد الجديد: <b>${:.3f}</b>".format(
                 amount, uid, new_bal), parse_mode="HTML")
@@ -917,6 +1040,8 @@ async def adm_price_msg_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("❌ أرسل رقم صحيح"); return True
         db.add_balance(uid, -amount)
         new_bal = db.get_balance(uid)
+        db.log_admin_action(update.effective_user.id, "خصم رصيد",
+                             "UID: {} | -${:.3f} | الرصيد الجديد: ${:.3f}".format(uid, amount, new_bal))
         await update.message.reply_text(
             "✅ خُصم <b>${:.3f}</b> من المستخدم <code>{}</code>\nالرصيد الجديد: <b>${:.3f}</b>".format(
                 amount, uid, new_bal), parse_mode="HTML")
@@ -931,6 +1056,8 @@ async def adm_price_msg_handler(update: Update, context: ContextTypes.DEFAULT_TY
         except ValueError:
             await update.message.reply_text("❌ أرسل رقم صحيح"); return True
         db.set_balance(uid, amount)
+        db.log_admin_action(update.effective_user.id, "تعيين رصيد",
+                             "UID: {} | الرصيد = ${:.3f}".format(uid, amount))
         await update.message.reply_text(
             "✅ رصيد <code>{}</code> = <b>${:.3f}</b>".format(uid, amount), parse_mode="HTML")
 
@@ -1560,7 +1687,9 @@ async def adm_sms_clear_tg_callback(update: Update, context: ContextTypes.DEFAUL
 
 async def adm_sms_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update, context): return
-    context.bot_data["db"].delete_all_sms_numbers()
+    db = context.bot_data["db"]
+    db.delete_all_sms_numbers()
+    db.log_admin_action(update.effective_user.id, "حذف كل أرقام SMS", "حذف شامل")
     await update.callback_query.answer("✅ تم حذف كل أرقام SMS", show_alert=True)
     await adm_sms_callback(update, context)
 
@@ -2245,3 +2374,206 @@ async def adm_report_ch_msg_handler(update: Update, context: ContextTypes.DEFAUL
         )
         return True
     return False
+
+
+# ══════════════════════════════════════════════════════════
+#  📈 أداء الدول
+# ══════════════════════════════════════════════════════════
+
+async def adm_performance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db   = context.bot_data["db"]
+    perf = db.get_country_performance(limit=10)
+    if not perf:
+        await update.callback_query.edit_message_text(
+            "📈 <b>أداء الدول</b>\n\nلا توجد طلبات بعد.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")]]),
+            parse_mode="HTML"
+        )
+        return
+    text = "📈 <b>أداء الدول (تيليجرام)</b>\n\n"
+    for p in perf:
+        cc = p["country_code"]
+        if cc.startswith("CAT_"):
+            flag, cname = "📦", cc[4:]
+        else:
+            flag, cname = COUNTRY_DATA.get(cc, ("🌍", cc))
+        bar_len = int(p["success_rate"] / 10)
+        bar = "🟩" * bar_len + "⬜" * (10 - bar_len)
+        text += (
+            "{flag} <b>{cname}</b>\n"
+            "  📦 إجمالي: {total} | ✅ ناجح: {completed} | ❌ ملغي: {cancelled}\n"
+            "  {bar} {rate}%\n\n"
+        ).format(flag=flag, cname=cname, total=p["total"], completed=p["completed"],
+                 cancelled=p["cancelled"], bar=bar, rate=p["success_rate"])
+    await update.callback_query.edit_message_text(
+        text.strip(),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")]]),
+        parse_mode="HTML"
+    )
+
+
+# ══════════════════════════════════════════════════════════
+#  ⚠️ تنبيه نفاد المخزون
+# ══════════════════════════════════════════════════════════
+
+async def adm_low_stock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db = context.bot_data["db"]
+    threshold = 3
+    tg_low  = db.get_low_stock_countries(threshold)
+    sms_low = db.get_low_stock_sms(threshold)
+
+    text = "⚠️ <b>تنبيه المخزون</b> (الحد: {} أو أقل)\n\n".format(threshold)
+    if not tg_low and not sms_low:
+        text += "✅ كل المخزون في حالة جيدة، لا توجد دول قاربت على النفاد."
+    else:
+        if tg_low:
+            text += "📱 <b>تيليجرام:</b>\n"
+            for c in tg_low:
+                flag = c["country_flag"] or ("📦" if c["country_code"].startswith("CAT_") else "🌍")
+                name = c["country_name"] or c["country_code"]
+                text += "  {} {} — متاح: <b>{}</b>\n".format(flag, name, c["available"])
+            text += "\n"
+        if sms_low:
+            text += "💬 <b>SMS:</b>\n"
+            for c in sms_low:
+                icon = "💬" if c["app_type"] == "whatsapp" else "✈️"
+                text += "  {} {} — متاح: <b>{}</b>\n".format(icon, c["country"], c["available"])
+
+    await update.callback_query.edit_message_text(
+        text.strip(),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")]]),
+        parse_mode="HTML"
+    )
+
+
+async def low_stock_check_loop(bot, db, interval_seconds: int = 3600, threshold: int = 3):
+    """يفحص المخزون بشكل دوري ويبعت تنبيه تلقائي للأدمن لو فيه دول قاربت على النفاد"""
+    import asyncio
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            admin_id = int(db.get_setting("admin_id", "0"))
+            if not admin_id:
+                continue
+            tg_low  = db.get_low_stock_countries(threshold)
+            sms_low = db.get_low_stock_sms(threshold)
+            if not tg_low and not sms_low:
+                continue
+            text = "⚠️ <b>تنبيه تلقائي: المخزون قارب على النفاد!</b>\n\n"
+            if tg_low:
+                text += "📱 <b>تيليجرام:</b>\n"
+                for c in tg_low:
+                    flag = c["country_flag"] or "🌍"
+                    name = c["country_name"] or c["country_code"]
+                    text += "  {} {} — متاح: <b>{}</b>\n".format(flag, name, c["available"])
+                text += "\n"
+            if sms_low:
+                text += "💬 <b>SMS:</b>\n"
+                for c in sms_low:
+                    icon = "💬" if c["app_type"] == "whatsapp" else "✈️"
+                    text += "  {} {} — متاح: <b>{}</b>\n".format(icon, c["country"], c["available"])
+            await bot.send_message(chat_id=admin_id, text=text.strip(), parse_mode="HTML")
+        except Exception as e:
+            logger.warning("low_stock_check_loop error: %s", e)
+
+
+# ══════════════════════════════════════════════════════════
+#  🔍 بحث عن رقم
+# ══════════════════════════════════════════════════════════
+
+async def adm_search_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    context.user_data["adm_state"] = "waiting_search_number"
+    await update.callback_query.edit_message_text(
+        "🔍 <b>بحث عن رقم</b>\n\nأرسل رقم الهاتف للبحث:\n<code>+1234567890</code>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")]]),
+        parse_mode="HTML"
+    )
+
+
+async def adm_search_number_msg_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if context.user_data.get("adm_state") != "waiting_search_number":
+        return False
+    context.user_data.pop("adm_state", None)
+    db    = context.bot_data["db"]
+    phone = (update.message.text or "").strip()
+    result = db.search_number(phone)
+
+    if not result:
+        await update.message.reply_text(
+            "❌ لم يُعثر على الرقم <code>{}</code>".format(phone), parse_mode="HTML"
+        )
+        return True
+
+    order = result.get("order")
+    if result["kind"] == "ready":
+        status_icon = {"available": "✅ متاح", "sold": "🛒 مباع"}.get(result["status"], result["status"])
+        text = (
+            "🔍 <b>نتيجة البحث — رقم جاهز</b>\n\n"
+            "📞 الرقم: <code>{phone}</code>\n"
+            "🌍 الدولة: {flag} {cname}\n"
+            "📊 الحالة: {status}\n"
+        ).format(phone=result["phone"], flag=result["country_flag"],
+                 cname=result["country_name"], status=status_icon)
+        if result.get("twofa"):
+            text += "🔐 2FA: <code>{}</code>\n".format(result["twofa"])
+        if order:
+            text += (
+                "\n📦 <b>آخر طلب:</b>\n"
+                "👤 المستخدم: <code>{uid}</code>\n"
+                "💰 السعر: ${cost:.3f}\n"
+                "🔑 الكود: <code>{code}</code>\n"
+                "📅 التاريخ: {date}\n"
+            ).format(uid=order["user_tg_id"], cost=order["cost"],
+                     code=order.get("otp_code") or "—", date=order["created_at"])
+    else:
+        status_icon = {"available": "✅ متاح", "locked": "🔒 محجوز"}.get(result["status"], result["status"])
+        text = (
+            "🔍 <b>نتيجة البحث — رقم SMS</b>\n\n"
+            "📞 الرقم: <code>{phone}</code>\n"
+            "🌍 الدولة: {country}\n"
+            "🌐 التطبيق: {app}\n"
+            "📊 الحالة: {status}\n"
+            "⚠️ عداد الفشل: {fail}\n"
+        ).format(phone=result["phone"], country=result["country"],
+                 app="💬 واتساب" if result["app_type"] == "whatsapp" else "✈️ تيليجرام",
+                 status=status_icon, fail=result.get("fail_count", 0))
+        if order:
+            text += (
+                "\n📦 <b>آخر طلب:</b>\n"
+                "👤 المستخدم: <code>{uid}</code>\n"
+                "💰 السعر: ${cost:.3f}\n"
+                "🔑 الكود: <code>{code}</code>\n"
+                "📅 التاريخ: {date}\n"
+            ).format(uid=order["user_tg_id"], cost=order["cost"],
+                     code=order.get("otp_code") or "—", date=order["created_at"])
+
+    await update.message.reply_text(text, parse_mode="HTML")
+    return True
+
+
+# ══════════════════════════════════════════════════════════
+#  📜 سجل العمليات الحساسة
+# ══════════════════════════════════════════════════════════
+
+async def adm_audit_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update, context): return
+    db  = context.bot_data["db"]
+    log = db.get_audit_log(limit=20)
+    if not log:
+        text = "📜 <b>سجل العمليات</b>\n\nلا توجد عمليات مسجَّلة بعد."
+    else:
+        text = "📜 <b>آخر {} عملية حساسة</b>\n\n".format(len(log))
+        for entry in log:
+            text += "🔸 <b>{action}</b>\n   {details}\n   🕐 {date}\n\n".format(
+                action=entry["action"],
+                details=entry.get("details") or "—",
+                date=entry["created_at"]
+            )
+    await update.callback_query.edit_message_text(
+        text.strip()[:4000],
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="adm_main")]]),
+        parse_mode="HTML"
+    )
