@@ -5,7 +5,7 @@ import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
-from otp_listener import _build_waiting_msg, build_order_msg
+from otp_listener import _build_waiting_msg, build_order_msg, build_rebuy_kb
 from i18n import t
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,46 @@ def _apply_referral_earning(db, user_id: int, order_cost: float):
             db.add_referral_earning(referrer, earning)
     except Exception:
         pass
+
+
+async def _check_low_balance(bot, db, user_id: int, lang: str):
+    """
+    يتحقق لو رصيد المستخدم بعد الشراء أصبح أقل من أرخص رقم متاح
+    (تيليجرام أو SMS)، ويبعت تنبيه مرة واحدة فقط لحد ما يشحن.
+    """
+    try:
+        bal = db.get_balance(user_id)
+        countries = db.get_available_countries()
+        min_price = min((db.get_price(c["country_code"]) for c in countries), default=None)
+        sms_countries = db.get_sms_countries()
+        sms_min = min((float(c.get("price", 0.5)) for c in sms_countries), default=None)
+        cheapest = min([p for p in (min_price, sms_min) if p is not None], default=None)
+
+        if cheapest is None:
+            return
+
+        already_warned = db.get_low_balance_warned(user_id)
+        if bal < cheapest:
+            if not already_warned:
+                msg = (
+                    "💳 <b>رصيدك منخفض!</b>\n\n"
+                    "رصيدك الحالي <b>${:.3f}</b> أقل من أرخص رقم متاح (${:.2f}).\n"
+                    "اشحن رصيدك الآن لتقدر تشتري 👇".format(bal, cheapest)
+                    if lang == "ar" else
+                    "💳 <b>Low balance!</b>\n\n"
+                    "Your balance <b>${:.3f}</b> is below the cheapest available number (${:.2f}).\n"
+                    "Top up now to continue buying 👇".format(bal, cheapest)
+                )
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+                    "💰 شحن رصيد" if lang == "ar" else "💰 Deposit", callback_data="deposit"
+                )]])
+                await bot.send_message(chat_id=user_id, text=msg, parse_mode="HTML", reply_markup=kb)
+                db.set_low_balance_warned(user_id, True)
+        else:
+            if already_warned:
+                db.set_low_balance_warned(user_id, False)
+    except Exception as e:
+        logger.warning("low_balance check error: %s", e)
 
 
 def _mask_phone(phone: str) -> str:
@@ -104,6 +144,10 @@ def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(t("btn_orders",       lang), callback_data="my_orders"),
             InlineKeyboardButton(t("btn_instructions", lang), callback_data="instructions"),
+        ],
+        [
+            InlineKeyboardButton("📜 سجل الأكواد" if lang == "ar" else "📜 Code History",
+                                 callback_data="otp_history"),
         ],
         [
             InlineKeyboardButton("💰 ربح رصيد" if lang == "ar" else "💰 Earn Balance",
@@ -334,6 +378,10 @@ async def buy_country_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not countries:
         await _edit(q, t("no_numbers", lang), _back_kb(lang=lang)); return
 
+    favorites = set(db.get_favorites(user.id))
+    if favorites:
+        countries = sorted(countries, key=lambda c: c["country_code"] not in favorites)
+
     bal  = db.get_balance(user.id)
     rows = []
     for i in range(0, len(countries), 2):
@@ -341,8 +389,9 @@ async def buy_country_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         for c in countries[i:i+2]:
             price = db.get_price(c["country_code"])
             can   = "✅" if bal >= price else "💳"
+            star  = "⭐ " if c["country_code"] in favorites else ""
             row.append(InlineKeyboardButton(
-                "{} {} {} — ${:.2f} ({})".format(can, c["country_flag"], c["country_name"], price, c["available"]),
+                "{}{} {} {} — ${:.2f} ({})".format(star, can, c["country_flag"], c["country_name"], price, c["available"]),
                 callback_data="buy_num_{}".format(c["country_code"])
             ))
         rows.append(row)
@@ -377,6 +426,9 @@ async def buy_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     bar = "🟩" * min(can, 5) + "⬜" * max(0, 5 - min(can, 5))
+    is_fav = db.is_favorite(user.id, cc)
+    fav_label = ("💔 إزالة من المفضلة" if lang == "ar" else "💔 Remove favorite") if is_fav else \
+                ("⭐ إضافة للمفضلة" if lang == "ar" else "⭐ Add to favorites")
     await _edit(q,
         t("country_detail", lang, flag=flag, name=cname, price=price, avail=avail, bal=bal, can=can, bar=bar),
         InlineKeyboardMarkup([
@@ -384,9 +436,25 @@ async def buy_number_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 t("btn_buy_now", lang) if can > 0 else t("btn_top_up", lang),
                 callback_data="confirm_buy_{}".format(cc) if can > 0 else "deposit"
             )],
+            [InlineKeyboardButton(fav_label, callback_data="toggle_fav_{}".format(cc))],
             [InlineKeyboardButton(t("btn_back", lang), callback_data="buy_country")],
         ])
     )
+
+
+async def toggle_favorite_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    db   = context.bot_data["db"]
+    user = update.effective_user
+    lang = _lang(db, user.id)
+    cc   = q.data.replace("toggle_fav_", "", 1)
+    added = db.toggle_favorite(user.id, cc)
+    msg = ("⭐ أُضيفت للمفضلة" if lang == "ar" else "⭐ Added to favorites") if added else \
+          ("💔 أُزيلت من المفضلة" if lang == "ar" else "💔 Removed from favorites")
+    await q.answer(msg)
+    # أعد عرض نفس الشاشة بالحالة الجديدة
+    q.data = "buy_num_{}".format(cc)
+    await buy_number_callback(update, context)
 
 # ──────────────────────────────────────────────────────────
 #  تأكيد الشراء
@@ -456,6 +524,7 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # إشعار المُحيل
     _apply_referral_earning(db, user.id, price)
+    await _check_low_balance(context.bot, db, user.id, lang)
     # إشعار قناة التفعيلات يُرسَل فقط عند وصول الكود (في otp_listener.py)
 
 # ──────────────────────────────────────────────────────────
@@ -489,7 +558,7 @@ async def get_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await q.edit_message_text(
                 build_order_msg(order["phone"], code, twofa=twofa),
-                parse_mode="HTML", reply_markup=None
+                parse_mode="HTML", reply_markup=build_rebuy_kb(order.get("country_code"))
             )
         except Exception:
             pass
@@ -525,6 +594,31 @@ async def my_orders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             code   = t("code_waiting",   lang)
             status = t("status_pending", lang)
         text += "{} <code>+{}</code>\n    🔑 {}\n\n".format(status, o["phone"], code)
+
+    await _edit(q, text.strip(), _back_kb(lang=lang))
+
+
+async def otp_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    db   = context.bot_data["db"]
+    user = update.effective_user
+    lang = _lang(db, user.id)
+    await _answer(q)
+
+    codes = db.get_recent_codes(user.id, limit=5)
+    if not codes:
+        msg = "📜 <b>سجل الأكواد</b>\n\nلا توجد أكواد مستلمة بعد." if lang == "ar" else \
+              "📜 <b>Code History</b>\n\nNo codes received yet."
+        await _edit(q, msg, _back_kb(lang=lang)); return
+
+    title = "📜 <b>آخر {} أكواد مستلمة</b>\n\n".format(len(codes)) if lang == "ar" else \
+            "📜 <b>Last {} codes received</b>\n\n".format(len(codes))
+    text = title
+    for c in codes:
+        icon = "📱" if c["kind"] == "tg" else "💬"
+        text += "{} <code>+{}</code>\n   🔑 <code>{}</code>\n   🌍 {}\n\n".format(
+            icon, c["phone"], c["otp_code"], c.get("country", "")
+        )
 
     await _edit(q, text.strip(), _back_kb(lang=lang))
 
@@ -731,3 +825,4 @@ async def sms_buy_callback(update, context):
         )
 
     _apply_referral_earning(db, user.id, price)
+    await _check_low_balance(context.bot, db, user.id, lang)
