@@ -134,16 +134,18 @@ async def _send_notify(bot, db, *, app_type: str, flag: str, country: str,
 def main_menu_kb(lang="ar", db=None) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(t("btn_buy_tg",  lang), callback_data="buy_country"),
-            InlineKeyboardButton(t("btn_sms",     lang), callback_data="sms_countries"),
+            InlineKeyboardButton("🛒 شراء رقم تيليجرام" if lang=="ar" else "🛒 Buy Telegram Number", callback_data="buy_country"),
+        ],
+        [
+            InlineKeyboardButton("📱 أرقام SMS" if lang=="ar" else "📱 SMS Numbers", callback_data="sms_countries"),
         ],
         [
             InlineKeyboardButton(t("btn_deposit", lang), callback_data="deposit"),
             InlineKeyboardButton(t("btn_account", lang), callback_data="my_account"),
         ],
         [
-            InlineKeyboardButton(t("btn_orders",       lang), callback_data="my_orders"),
             InlineKeyboardButton(t("btn_instructions", lang), callback_data="instructions"),
+            InlineKeyboardButton("📜 سجل الأكواد" if lang == "ar" else "📜 Code History", callback_data="otp_history"),
         ],
         [
             InlineKeyboardButton("📜 سجل الأكواد" if lang == "ar" else "📜 Code History",
@@ -395,7 +397,7 @@ async def buy_country_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 callback_data="buy_num_{}".format(c["country_code"])
             ))
         rows.append(row)
-    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
+    rows.append([InlineKeyboardButton("🏠 " + t("btn_back", lang), callback_data="main_menu")])
     await _edit(q, t("buy_country_title", lang, bal=bal), InlineKeyboardMarkup(rows))
 
 # ──────────────────────────────────────────────────────────
@@ -644,18 +646,18 @@ async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal        = db.get_balance(update.effective_user.id)
 
     rows = []
-    if stars_on:   rows.append([InlineKeyboardButton(t("btn_stars",   lang), callback_data="charge_stars")])
-    if binance_on: rows.append([InlineKeyboardButton(t("btn_binance", lang), callback_data="charge_binance")])
-    if usdt_on:    rows.append([InlineKeyboardButton(t("btn_usdt",    lang), callback_data="charge_usdt_menu")])
-    if trx_on:     rows.append([InlineKeyboardButton(t("btn_trx",     lang), callback_data="charge_trx")])
-    if ton_on:     rows.append([InlineKeyboardButton(t("btn_ton",     lang), callback_data="charge_ton")])
-    if vod_on:     rows.append([InlineKeyboardButton(t("btn_vod",     lang), callback_data="charge_vodafone")])
+    if stars_on:   rows.append([InlineKeyboardButton("⭐ نجوم تيليجرام" if lang=="ar" else "⭐ Telegram Stars", callback_data="charge_stars")])
+    if binance_on: rows.append([InlineKeyboardButton("🟡 Binance Pay", callback_data="charge_binance")])
+    if usdt_on:    rows.append([InlineKeyboardButton("💎 USDT",       callback_data="charge_usdt_menu")])
+    if trx_on:     rows.append([InlineKeyboardButton("🔴 TRX",        callback_data="charge_trx")])
+    if ton_on:     rows.append([InlineKeyboardButton("💎 TON",        callback_data="charge_ton")])
+    if vod_on:     rows.append([InlineKeyboardButton("📱 فودافون كاش", callback_data="charge_vodafone")])
     if not rows:   rows.append([InlineKeyboardButton(t("no_payment",  lang), callback_data="main_menu")])
     rows.append([InlineKeyboardButton(
-        "🎟️ استخدام كوبون" if lang == "ar" else "🎟️ Use Coupon",
+        "🎟️ كوبون خصم" if lang == "ar" else "🎟️ Coupon",
         callback_data="use_coupon"
     )])
-    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")])
+    rows.append([InlineKeyboardButton("🏠 " + t("btn_back", lang), callback_data="main_menu")])
 
     await _edit(q, t("deposit_title", lang, bal=bal), InlineKeyboardMarkup(rows))
 
@@ -716,7 +718,7 @@ async def sms_countries_callback(update, context):
             "✈️ {} ({} متاح)".format(tg_label, tg_avail) if lang == "ar" else "✈️ {} ({} available)".format(tg_label, tg_avail),
             callback_data="sms_app_telegram"
         )],
-        [InlineKeyboardButton(t("btn_back", lang), callback_data="main_menu")],
+        [InlineKeyboardButton("🏠 " + t("btn_back", lang), callback_data="main_menu")],
     ]
     await _edit(q, text, InlineKeyboardMarkup(rows))
 
