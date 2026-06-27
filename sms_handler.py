@@ -116,55 +116,47 @@ def _flatten_json(obj, sep=" | ") -> str:
 
 def _build_sms_waiting_msg(phone: str, country: str) -> str:
     return (
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🎉 <b>تم الشراء بنجاح!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🌍 <b>الدولة:</b> {country}\n"
-        "📞 <b>الرقم:</b> <code>{phone}</code>\n"
-        "🔑 <b>الكود:</b> ⏳ في انتظار الرسالة...\n\n"
-        "⏰ <i>سيصل الكود تلقائياً، الانتظار حتى 10 دقائق</i>"
+        "⚡ <b>تم الشراء!</b>\n\n"
+        "🌍 <b>الدولة:</b>  {country}\n"
+        "📞 <b>الرقم:</b>   <code>{phone}</code>\n"
+        "🔑 <b>الكود:</b>   ⏳ <i>في الانتظار...</i>\n\n"
+        "⏰ <i>الانتظار حتى 10 دقائق</i>"
     ).format(country=country, phone=phone)
 
 
 def _sms_waiting_kb(order_id: int):
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ إلغاء الرقم", callback_data="sms_cancel_{}".format(order_id)),
-        InlineKeyboardButton("🚫 حظر الرقم",  callback_data="sms_block_{}".format(order_id)),
+        InlineKeyboardButton("❌ إلغاء", callback_data="sms_cancel_{}".format(order_id)),
+        InlineKeyboardButton("🚫 حظر",   callback_data="sms_block_{}".format(order_id)),
     ]])
 
 
 def _build_sms_done_msg(phone: str, country: str, code: str, full_response: str) -> str:
     msg = (
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "✅ <b>تم استلام الكود!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🌍 <b>الدولة:</b> {country}\n"
-        "📞 <b>الرقم:</b> <code>{phone}</code>\n"
-        "🔑 <b>كود التحقق:</b> <code>{code}</code>\n"
+        "✅ <b>الكود وصل!</b>\n\n"
+        "🌍 <b>الدولة:</b>        {country}\n"
+        "📞 <b>الرقم:</b>         <code>{phone}</code>\n"
+        "🔑 <b>كود التحقق:</b>   <code>{code}</code>\n"
     ).format(country=country, phone=phone, code=code)
 
-    # أضف الرد الكامل من الـ API (مفيد لو في نص SMS كامل)
     if full_response and full_response.strip() != code:
-        # اختصره لو طويل
-        display = full_response[:800] + ("..." if len(full_response) > 800 else "")
-        msg += "\n📩 <b>الرسالة الكاملة:</b>\n<code>{}</code>\n".format(display)
+        display = full_response[:400] + ("..." if len(full_response) > 400 else "")
+        msg += "📩 <b>الرسالة:</b>  <code>{}</code>\n".format(display)
 
     suggested_name = get_random_name()
-    msg += "\n📝 <b>اسم مقترح:</b> <code>{}</code>\n".format(suggested_name)
-    msg += "\n<i>✅ احفظ هذه البيانات في مكان آمن</i>"
+    msg += "\n📝 <b>اسم مقترح:</b>  <code>{}</code>\n".format(suggested_name)
+    msg += "\n⚠️ <i>احفظ هذه البيانات فوراً</i>"
     return msg
 
 
 def _build_sms_expired_msg(phone: str, country: str) -> str:
     return (
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⏰ <b>انتهت مهلة الانتظار</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🌍 <b>الدولة:</b> {country}\n"
-        "📞 <b>الرقم:</b> <code>{phone}</code>\n\n"
-        "❌ لم يصل أي كود خلال 10 دقائق.\n"
-        "💰 <b>تم إرجاع رصيدك كاملاً.</b>"
+        "⏰ <b>انتهت مهلة الانتظار</b>\n\n"
+        "🌍 <b>الدولة:</b>  {country}\n"
+        "📞 <b>الرقم:</b>   <code>{phone}</code>\n\n"
+        "❌ لم يصل أي كود خلال 10 دقائق\n"
+        "💰 <b>تم إرجاع رصيدك كاملاً ✅</b>"
     ).format(country=country, phone=phone)
 
 
@@ -234,15 +226,14 @@ class SmsPoller:
                                         bot_me     = await self.bot.get_me()
                                         bot_uname  = "@" + bot_me.username
                                         notif = (
-                                            "✅ <b>تم شراء رقم جديد</b>\n\n"
-                                            "🌐 <b>التطبيق:</b> SMS\n"
-                                            "🌍 <b>الدولة:</b> {country}\n"
-                                            "📞 <b>الرقم:</b> <code>{phone}</code>\n"
-                                            "🔑 <b>الكود:</b> <code>{code}</code>\n"
-                                            "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
-                                            "⚡ <b>الحالة:</b> تم التفعيل ⚡\n"
-                                            "💰 <b>السعر:</b> ${price:.3f}\n"
-                                            "🤖 <b>للشراء:</b> {bot}"
+                                            "✅ <b>تفعيل ناجح!</b>\n\n"
+                                            "🌐 <b>التطبيق:</b>   SMS\n"
+                                            "🌍 <b>الدولة:</b>    {country}\n"
+                                            "📞 <b>الرقم:</b>     <code>{phone}</code>\n"
+                                            "🔑 <b>الكود:</b>     <code>{code}</code>\n"
+                                            "👤 <b>المستخدم:</b>  <code>{uid}</code>\n"
+                                            "💰 <b>السعر:</b>     ${price:.3f}\n"
+                                            "🤖 <b>البوت:</b>     {bot}"
                                         ).format(
                                             country=country, phone=m_phone,
                                             code=m_code, uid=m_uid,

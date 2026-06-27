@@ -23,26 +23,22 @@ OTP_TIMEOUT   = 5 * 60       # 5 دقايق بالثواني
 
 def _build_waiting_msg(phone: str) -> str:
     return (
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🎉 <b>تم الشراء بنجاح!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📞 <b>الرقم:</b> <code>+{}</code>\n"
-        "🔑 <b>الكود:</b> ⏳ في انتظار الرسالة...\n\n"
-        "⏰ <i>سيصل الكود تلقائياً، الانتظار حتى 5 دقائق</i>"
-    ).format(phone)
+        "⚡ <b>تم الشراء!</b>\n\n"
+        "📞 <b>الرقم:</b>  <code>+{phone}</code>\n"
+        "🔑 <b>الكود:</b>  ⏳ <i>في انتظار الرسالة...</i>\n\n"
+        "⏰ <i>سيصل خلال دقائق</i>"
+    ).format(phone=phone)
 
 
 def build_order_msg(phone: str, code: str, twofa: str = None) -> str:
     msg = (
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🎉 <b>تم شراء الرقم بنجاح!</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📞 <b>الرقم:</b> <code>+{}</code>\n"
-        "🔑 <b>كود التحقق:</b> <code>{}</code>"
-    ).format(phone, code)
+        "✅ <b>الكود وصل!</b>\n\n"
+        "📞 <b>الرقم:</b>        <code>+{phone}</code>\n"
+        "🔑 <b>كود التحقق:</b>  <code>{code}</code>"
+    ).format(phone=phone, code=code)
     if twofa:
-        msg += "\n🔐 <b>التحقق بخطوتين:</b> <code>{}</code>".format(twofa)
-    msg += "\n\n<i>✅ احفظ هذه البيانات في مكان آمن</i>"
+        msg += "\n🔐 <b>2FA:</b>  <code>{}</code>".format(twofa)
+    msg += "\n\n⚠️ <i>احفظ هذه البيانات فوراً</i>"
     return msg
 
 
@@ -51,7 +47,8 @@ def build_rebuy_kb(country_code: str):
     if not country_code:
         return None
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔁 شراء رقم آخر من نفس الدولة", callback_data="buy_num_{}".format(country_code))
+        InlineKeyboardButton("🔁 شراء مرة أخرى", callback_data="buy_num_{}".format(country_code)),
+        InlineKeyboardButton("🏠 القائمة",        callback_data="main_menu"),
     ]])
 
 
@@ -352,15 +349,14 @@ class OtpListener:
                 bot_username = "@" + bot_me.username
 
                 notif = (
-                    "✅ <b>تم شراء رقم جديد</b>\n\n"
-                    "🌐 <b>التطبيق:</b> تيليجرام\n"
-                    "🌍 <b>الدولة:</b> {flag} {country}\n"
-                    "📞 <b>الرقم:</b> <code>{phone}</code>\n"
-                    "🔑 <b>الكود:</b> <code>{code}</code>\n"
-                    "👤 <b>المستخدم:</b> <code>{uid}</code>\n"
-                    "⚡ <b>الحالة:</b> تم التفعيل ⚡\n"
-                    "💰 <b>السعر:</b> ${price:.3f}\n"
-                    "🤖 <b>للشراء:</b> {bot}"
+                    "✅ <b>تفعيل ناجح!</b>\n\n"
+                    "🌐 <b>التطبيق:</b>   تيليجرام\n"
+                    "🌍 <b>الدولة:</b>    {flag} {country}\n"
+                    "📞 <b>الرقم:</b>     <code>{phone}</code>\n"
+                    "🔑 <b>الكود:</b>     <code>{code}</code>\n"
+                    "👤 <b>المستخدم:</b>  <code>{uid}</code>\n"
+                    "💰 <b>السعر:</b>     ${price:.3f}\n"
+                    "🤖 <b>البوت:</b>     {bot}"
                 ).format(
                     flag=flag, country=cname,
                     phone=masked_phone, code=masked_code,
