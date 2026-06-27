@@ -27,32 +27,37 @@ def _short(v, n=18):
 
 def admin_main_kb():
     return InlineKeyboardMarkup([
+        # ── المخزون ──────────────────────────
         [
-            InlineKeyboardButton("📱 أرقام TG",      callback_data="adm_numbers"),
-            InlineKeyboardButton("💬 أرقام SMS",     callback_data="adm_sms"),
+            InlineKeyboardButton("📱 أرقام تيليجرام", callback_data="adm_numbers"),
+            InlineKeyboardButton("💬 أرقام SMS",       callback_data="adm_sms"),
+        ],
+        # ── المال والطلبات ───────────────────
+        [
+            InlineKeyboardButton("💰 الأسعار",         callback_data="adm_prices"),
+            InlineKeyboardButton("📋 الطلبات",         callback_data="adm_orders"),
         ],
         [
-            InlineKeyboardButton("💰 الأسعار",       callback_data="adm_prices"),
-            InlineKeyboardButton("📊 الإحصائيات",    callback_data="adm_stats"),
+            InlineKeyboardButton("💳 الشحن",           callback_data="adm_deposits"),
+            InlineKeyboardButton("📊 الإحصائيات",      callback_data="adm_stats"),
+        ],
+        # ── المستخدمون والتواصل ──────────────
+        [
+            InlineKeyboardButton("👥 المستخدمون",      callback_data="adm_users"),
+            InlineKeyboardButton("📢 إشعار جماعي",    callback_data="adm_broadcast"),
+        ],
+        # ── التحليل والمراقبة ─────────────────
+        [
+            InlineKeyboardButton("📈 أداء الدول",       callback_data="adm_performance"),
+            InlineKeyboardButton("⚠️ تنبيه المخزون",   callback_data="adm_low_stock"),
         ],
         [
-            InlineKeyboardButton("📋 الطلبات",       callback_data="adm_orders"),
-            InlineKeyboardButton("💳 الشحن",         callback_data="adm_deposits"),
+            InlineKeyboardButton("🔍 بحث عن رقم",      callback_data="adm_search_number"),
+            InlineKeyboardButton("📜 سجل العمليات",    callback_data="adm_audit_log"),
         ],
-        [
-            InlineKeyboardButton("👥 المستخدمين",    callback_data="adm_users"),
-            InlineKeyboardButton("📢 إشعار جماعي",  callback_data="adm_broadcast"),
-        ],
-        [
-            InlineKeyboardButton("📈 أداء الدول",     callback_data="adm_performance"),
-            InlineKeyboardButton("🔍 بحث رقم",        callback_data="adm_search_number"),
-        ],
-        [
-            InlineKeyboardButton("⚠️ تنبيه المخزون",  callback_data="adm_low_stock"),
-            InlineKeyboardButton("📜 سجل العمليات",   callback_data="adm_audit_log"),
-        ],
-        [InlineKeyboardButton("⚙️ الإعدادات",        callback_data="adm_settings")],
-        [InlineKeyboardButton("🔙 رجوع للقائمة",     callback_data="main_menu")],
+        # ── الإعدادات والخروج ────────────────
+        [InlineKeyboardButton("⚙️ الإعدادات",          callback_data="adm_settings")],
+        [InlineKeyboardButton("🏠 الرجوع للقائمة",     callback_data="main_menu")],
     ])
 
 
@@ -68,12 +73,12 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_today   = stats["today"]   + stats.get("sms_today",   0)
     await update.callback_query.edit_message_text(
         "👑 <b>لوحة التحكم</b>\n\n"
-        "👥 المستخدمين: <b>{users}</b>  🚫 محظور: <b>{banned}</b>\n"
-        "📱 أرقام TG: ✅<b>{available}</b> متاح | 🛒<b>{sold}</b> مباع\n"
-        "💬 أرقام SMS: ✅<b>{sms_avail}</b> متاح\n"
-        "📦 الطلبات: <b>{orders}</b>  🌟 اليوم: <b>{today}</b>\n"
-        "💰 الإيرادات: <b>${revenue:.2f}</b>\n"
-        "⏳ شحن معلق: <b>{pend}</b>".format(
+        "👥 <b>المستخدمون:</b>  <b>{users}</b>  •  🚫 محظور: <b>{banned}</b>\n\n"
+        "📱 TG:   ✅ <b>{available}</b> متاح  |  🛒 <b>{sold}</b> مباع\n"
+        "💬 SMS:  ✅ <b>{sms_avail}</b> متاح\n\n"
+        "📦 <b>الطلبات:</b>  <b>{orders}</b>  •  🌟 اليوم: <b>{today}</b>\n"
+        "💰 <b>الإيرادات:</b>  <b>${revenue:.2f}</b>\n"
+        "⏳ <b>شحن معلق:</b>  <b>{pend}</b>".format(
             pend=pend,
             sms_avail=stats.get("sms_avail", 0),
             orders=total_orders, today=total_today,
@@ -147,8 +152,8 @@ async def adm_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text += "📱 أرقام TG:  <b>{}</b>\n".format(stats["orders"])
     text += "💬 أرقام SMS: <b>{}</b> (مكتمل: {})\n".format(sms_total, sms_completed)
     text += "📲 SMS متاح:  <b>{}</b>\n\n".format(sms_avail)
-    text += "━━━━ 👥 المستخدمون ━━━━\n"
-    text += "إجمالي: <b>{}</b>\n".format(stats["users"])
+    text += "━━━━━ 👥 المستخدمون ━━━━━\n"
+    text += "📊 إجمالي: <b>{}</b>\n".format(stats["users"])
     text += "💳 إجمالي رصيد المستخدمين: <b>${:.2f}</b>\n".format(total_users_bal)
     if top_countries:
         text += "\n━━━━ 🏆 أكثر الدول ━━━━\n"
@@ -2461,7 +2466,7 @@ async def low_stock_check_loop(bot, db, interval_seconds: int = 3600, threshold:
             sms_low = db.get_low_stock_sms(threshold)
             if not tg_low and not sms_low:
                 continue
-            text = "⚠️ <b>تنبيه تلقائي: المخزون قارب على النفاد!</b>\n\n"
+            text = "🔔 <b>تنبيه: مخزون منخفض!</b>\n\n"
             if tg_low:
                 text += "📱 <b>تيليجرام:</b>\n"
                 for c in tg_low:
